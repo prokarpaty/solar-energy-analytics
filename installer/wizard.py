@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from ha_connection import validate_url, rest_open
 from email_security import validate_mailbox, validate_recipients
 import ui
+from schedule_times import parse_send_time
 I18N = {
     "en": {
         "title":"SOLAR ENERGY ANALYTICS — Setup Wizard",
@@ -114,8 +115,9 @@ def yesno(value: str, default: bool = False) -> bool:
     raise ValueError('Expected yes/no (y/n)')
 
 
-def schedule_yaml(timezone: str, enabled: dict[str,bool]) -> str:
-    # This is intentionally compatible with the current fixed-calendar scheduler.
+def schedule_yaml(timezone: str, enabled: dict[str,bool], times: dict[str,str] | None = None) -> str:
+    # Report periods remain anchored to midnight, regardless of delivery time.
+    times = {} if times is None else times
     lines = ['timezone: '+timezone, 'scheduler:', '  check_interval_seconds: 60',
              '  statistics_delay_minutes: 10', '  retry_interval_minutes: 15',
              '  max_attempts: 5', '  catch_up: true', '  catch_up_days: 7', 'reports:']
@@ -125,8 +127,11 @@ def schedule_yaml(timezone: str, enabled: dict[str,bool]) -> str:
                  'quarterly':('0 0 1 1,4,7,10 *','previous_quarter'),
                  'yearly':('0 0 1 1 *','previous_year')}
     for typ,(cron,period) in schedules.items():
+        send_time = times.get(typ, '00:00')
+        parse_send_time(send_time)
         lines += [f'  {typ}:',f"    enabled: {str(enabled[typ]).lower()}",
-                  f'    cron: "{cron}"',f'    period: {period}']
+                  f'    cron: "{cron}"',f'    period: {period}',
+                  f'    send_time: "{send_time}"']
     return '\n'.join(lines)+'\n'
 
 def validate_email(value: str) -> str:
@@ -262,6 +267,7 @@ def _main() -> int:
         )
         ui.section(5, 7, 'Report schedules', 'Розклад звітів', lang)
         schedule_enabled={}
+        schedule_times={}
         names={'daily':('Daily','Щоденні'),'weekly':('Weekly','Щотижневі'),
                'monthly':('Monthly','Щомісячні'),'quarterly':('Quarterly','Щоквартальні'),
                'yearly':('Yearly','Річні')}
@@ -269,6 +275,25 @@ def _main() -> int:
             default=typ!='quarterly'
             title=(uk if lang=='uk' else en)
             schedule_enabled[typ]=yesno(prompt(t['schedule'].format(name=title,default='Y/n' if default else 'y/N')),default)
+            if schedule_enabled[typ]:
+                while True:
+                    question = (
+                        f'Час надсилання {title.lower()} (HH:MM, {tz}) [08:00]: '
+                        if lang == 'uk' else
+                        f'Send time for {title.lower()} reports (HH:MM, {tz}) [08:00]: '
+                    )
+                    send_time = prompt(question, '08:00')
+                    try:
+                        parse_send_time(send_time)
+                    except ValueError:
+                        ui.message(
+                            'Введіть час у форматі HH:MM, наприклад 08:00.'
+                            if lang == 'uk' else
+                            'Enter a 24-hour time, e.g. 08:00.'
+                        )
+                        continue
+                    schedule_times[typ] = send_time
+                    break
         ui.section(6, 7, 'Email delivery', 'Електронна пошта', lang)
         smtp_enabled=yesno(prompt(t['email']))
         smtp={}
@@ -308,6 +333,7 @@ def _main() -> int:
             'timezone': tz,
             'report_language': report_lang,
             'reports': schedule_enabled,
+            'report_times': schedule_times,
             'smtp_enabled': smtp_enabled,
             'smtp_host': smtp.get('host', ''),
             'smtp_port': smtp.get('port', 587),
@@ -364,7 +390,7 @@ def _main() -> int:
             for p, value, mode in ((ROOT/'.env',env,0o600),(secret_dir/'ha_token',token+'\n',0o600),
                                    (secret_dir/'smtp_password',(smtp.get('password') or '')+'\n',0o600),
                                    (sensor_path,mapping,0o600),
-                                   (ROOT/'config/schedule.yaml',schedule_yaml(tz,schedule_enabled),0o600),
+                                   (ROOT/'config/schedule.yaml',schedule_yaml(tz,schedule_enabled,schedule_times),0o600),
                                    (profile_path,profile_yaml,0o600)):
                 create_exclusive(p,value,mode)
                 written.append(p)
