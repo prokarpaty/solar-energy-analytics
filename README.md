@@ -242,6 +242,12 @@ bash deploy.sh --check
 
 **UA:** GitHub Actions перевіряє синтаксис shell/Python та конфігурацію Docker Compose, будує образ, запускає автоматизовані тести в обмеженому контейнері й сканує образ через Trivy. Конвеєр блокує **виправні** вразливості рівня HIGH/CRITICAL; проблеми, для яких ще немає виправлень, потребують окремого аналізу. У CI використовуються тестові облікові дані, а автоматичного розгортання на домашньому сервері немає.
 
+## Open-source notice, warranty and support / Відкритий код, гарантії та підтримка
+
+**EN:** Solar Energy Analytics is intended for open-source distribution and is provided **"AS IS"**, without warranty. The authors and contributors do **not** guarantee technical support, maintenance, updates, security fixes or response times. Users are responsible for securing their installation, keeping backups and verifying reports. See the [Software Use Notice and Disclaimer](SOFTWARE_NOTICE.md) for full English and Ukrainian terms. **The notice is not an open-source license**; a separate `LICENSE` file is required to grant reuse and redistribution rights.
+
+**UA:** Solar Energy Analytics планується поширювати з відкритим вихідним кодом. Програмне забезпечення надається **«ЯК Є»**, без гарантій. Автори та учасники проєкту **не гарантують** технічну підтримку, обслуговування, оновлення, виправлення вразливостей або строки відповіді. Користувачі самостійно відповідають за захист системи, резервні копії й перевірку звітів. Повний текст українською та англійською — у [Повідомленні про використання ПЗ та відмову від гарантій](SOFTWARE_NOTICE.md). **Це повідомлення не є відкритою ліцензією**; для надання прав на використання і поширення потрібен окремий файл `LICENSE`.
+
 ## Limitations / Обмеження
 
 - Historical reports depend on the availability, timestamps and completeness of Home Assistant recorder statistics. Missing historical periods are flagged rather than fabricated.
