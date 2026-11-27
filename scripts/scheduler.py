@@ -15,6 +15,7 @@ import fcntl
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from schedule_times import delivery_ready_at
 from secure_files import PrivateRotatingFileHandler, private_append, private_database
 
 from ha_client import get_period, CONFIG as SENSORS, TZ as REPORT_TZ, numeric, valid_rows
@@ -302,9 +303,7 @@ def enqueue_jobs(conn):
                 report_type, scheduled
             )
 
-            ready_at = (
-                scheduled
-            ).timestamp() + DELAY * 60
+            ready_at = delivery_ready_at(scheduled, config, DELAY)
 
             cursor = conn.execute("""
                 INSERT OR IGNORE INTO jobs (
@@ -661,9 +660,11 @@ def show_schedule():
                 report_type, candidate
             )
 
+            ready_at = datetime.fromtimestamp(
+                delivery_ready_at(candidate, config, DELAY), TZ
+            )
             print(
-                f"{report_type:12} "
-                f"{candidate.isoformat()} | "
+                f"{report_type:12} {ready_at.isoformat()} | "
                 f"{report_id}"
             )
 
