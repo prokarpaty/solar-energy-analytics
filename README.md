@@ -85,6 +85,23 @@ Follow the English/Ukrainian wizard. It confirms configuration, offers to build 
 
 The bilingual wizard collects the Home Assistant URL and token; discovers sensor entities and helps map energy and optional measurements; configures installation/equipment/branding, timezone and report language; and offers daily, weekly, monthly, quarterly and yearly schedules plus optional SMTP delivery. SMTP authentication can be tested without sending a message. The installer validates configuration and **asks separately** before building the image and starting the scheduler. Do not enable automatic delivery if another installation is already sending the same reports.
 
+### Report delivery times / Час надсилання звітів
+
+For each enabled report type, the wizard asks for an optional **24-hour local send time**, e.g. `08:00` (default). The schedule uses the timezone selected in the wizard. Daily reports cover the previous day, weekly reports the previous Monday–Sunday week, and monthly/quarterly/yearly reports the previous completed calendar period. The earliest delivery time is the later of the requested clock time and the recorder-statistics delay (10 minutes by default); generation, API availability and SMTP retries can postpone actual delivery. The chosen time does not change the historical reporting period.
+
+For an **existing installation**, do not rerun the installer: edit the private `config/schedule.yaml` file and add a per-report `send_time` value:
+
+```yaml
+reports:
+  daily:
+    enabled: true
+    cron: "0 0 * * *"
+    period: previous_day
+    send_time: "08:00"
+```
+
+Retain all other entries in `config/schedule.yaml`. Back up the file first, then apply changes with `bash deploy.sh --stop` followed by `bash deploy.sh --start`. Previously queued reports retain their stored retry/dispatch times, so review scheduler status before changing an active schedule.
+
 Private local files are ignored by Git: `.env`, `secrets/`, `config/sensors.yaml`, `config/schedule.yaml`, `config/installation.yaml`, `reports/`, `logs/`, `state/` and `backups/`. Never commit tokens, passwords, private reports or SQLite state. The wizard's dry run previews configuration; it does not deploy the application.
 
 ## Operations
