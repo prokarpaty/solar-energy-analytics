@@ -1,0 +1,9 @@
+# Example only; replace IDs with your Home Assistant entities after installation.
+energy:
+  production: sensor.REPLACE_ME_SOLAR_ENERGY
+  consumption: sensor.REPLACE_ME_LOAD_ENERGY
+  grid_import: sensor.REPLACE_ME_GRID_IMPORT_ENERGY
+  grid_export: sensor.REPLACE_ME_GRID_EXPORT_ENERGY
+  battery_charge: sensor.REPLACE_ME_BATTERY_CHARGE_ENERGY
+  battery_discharge: sensor.REPLACE_ME_BATTERY_DISCHARGE_ENERGY
+  inverter_losses: sensor.REPLACE_ME_INVERTER_LOSSES_ENERGY

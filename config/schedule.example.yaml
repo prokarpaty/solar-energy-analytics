@@ -1,0 +1,14 @@
+timezone: Europe/Kyiv
+scheduler:
+  check_interval_seconds: 60
+  statistics_delay_minutes: 10
+  retry_interval_minutes: 15
+  max_attempts: 5
+  catch_up: true
+  catch_up_days: 7
+reports:
+  daily: {enabled: true, cron: '0 0 * * *', period: previous_day}
+  weekly: {enabled: true, cron: '0 0 * * 1', period: previous_week}
+  monthly: {enabled: true, cron: '0 0 1 * *', period: previous_month}
+  quarterly: {enabled: false, cron: '0 0 1 1,4,7,10 *', period: previous_quarter}
+  yearly: {enabled: true, cron: '0 0 1 1 *', period: previous_year}

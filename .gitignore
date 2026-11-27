@@ -1,0 +1,25 @@
+# Never version local credentials or reports
+.env
+.env.*
+!.env.example
+secrets/
+reports/
+logs/
+state/
+backups/
+*.sqlite
+*.sqlite-*
+*.db
+*.tar
+*.tar.gz
+*.zip
+*.backup
+*.dump
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+
+# User-specific mappings and schedules
+config/sensors.yaml
+config/schedule.yaml

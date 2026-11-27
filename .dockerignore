@@ -1,0 +1,16 @@
+.env
+.env.*
+secrets/
+reports/
+logs/
+state/
+backups/
+.git/
+*.db
+*.sqlite*
+*.tar*
+__pycache__/
+.venv/
+
+config/sensors.yaml
+config/schedule.yaml
