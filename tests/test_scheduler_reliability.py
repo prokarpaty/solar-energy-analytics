@@ -154,6 +154,37 @@ class SchedulerReliability(unittest.TestCase):
         self.assertEqual(kwargs["timeout"], 1800)
         self.assertNotIn(marker, "\n".join(captured.output))
 
+
+    def test_configured_delivery_time_used_for_queue(self):
+        with patch.dict(s.CONFIG["reports"]["daily"], {"send_time": "18:30"}):
+            self.conn.execute(
+                "DELETE FROM jobs WHERE scheduled_at LIKE '2026-11-25%'"
+            )
+            self.conn.execute(
+                "UPDATE metadata SET value='2026-11-25T10:00:00+02:00'"
+            )
+            self.conn.commit()
+            s.enqueue_jobs(self.conn)
+            row = self.conn.execute(
+                "SELECT * FROM jobs WHERE report_type='daily' "
+                "AND scheduled_at LIKE '2026-11-25%'"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            expected = datetime(2026, 11, 25, 18, 30, tzinfo=s.TZ)
+            self.assertEqual(row["next_attempt"], expected.timestamp())
+            self.assertEqual(
+                datetime.fromisoformat(row["scheduled_at"]).hour, 0
+            )
+
+    def test_next_schedule_prints_same_day_future_send_time(self):
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with patch.dict(s.CONFIG["reports"]["daily"], {"send_time": "18:30"}), \
+             redirect_stdout(out):
+            s.show_schedule()
+        self.assertIn("2026-11-25T18:30:00+02:00", out.getvalue())
+
     def test_subprocess_error_confidentiality(self):
         import subprocess
 
