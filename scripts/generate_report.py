@@ -1,12 +1,21 @@
 import os
+import sys
 import json
 import argparse
 from localization import Localizer
+from secure_files import atomic_private
+from report_paths import secure_report_directory
 
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from ha_client import collect_report, TZ
+from ha_client import collect_report, TZ, CONFIG, get_period
+from report_validation import (
+    validate_structure,
+    validate_statistics,
+    MAX_JSON_BYTES
+)
+from report_reconciliation import reconcile_report
 
 
 REPORT_NAMES = {'daily': 'daily',
@@ -42,7 +51,24 @@ def main():
 
     print(loc.text("cli.generating", period=loc.text("period." + args.type)))
 
-    data = collect_report(args.type, now=args.as_of)
+    reference = args.as_of or datetime.now(TZ)
+    data = collect_report(args.type, now=reference)
+
+    validate_structure(data)
+    validate_statistics(data)
+    reconcile_report(data, CONFIG["energy"])
+
+    expected_start, expected_end = get_period(
+        args.type, now=reference
+    )
+
+    if (
+        data["report_type"] != args.type
+        or data["timezone"] != TZ.key
+        or datetime.fromisoformat(data["start"]) != expected_start
+        or datetime.fromisoformat(data["end"]) != expected_end
+    ):
+        raise ValueError("Generated report identity mismatch")
 
     start = datetime.fromisoformat(data["start"])
     end = datetime.fromisoformat(data["end"])
@@ -60,23 +86,20 @@ def main():
         )
     ) / args.type
 
-    directory.mkdir(parents=True, exist_ok=True)
+    directory = secure_report_directory(directory)
 
     output = directory / f"{filename}.json"
 
-    temporary = output.with_suffix(".json.tmp")
+    payload = json.dumps(
+        data, ensure_ascii=False, indent=2,
+        allow_nan=False
+    ).encode("utf-8")
 
-    temporary.write_text(
-        json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2,
-            allow_nan=False
-        ),
-        encoding="utf-8"
-    )
+    if not 0 < len(payload) <= MAX_JSON_BYTES:
+        raise ValueError("Report size exceeds allowed limit")
 
-    temporary.replace(output)
+    with atomic_private(output) as stream:
+        stream.write(payload)
 
     print("\n" + "=" * 65)
     print(loc.text("report." + args.type))
@@ -108,4 +131,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception:
+        print(
+            "Report generation failed [GENERATION_ERROR]",
+            file=sys.stderr
+        )
+        sys.exit(1)

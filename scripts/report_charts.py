@@ -1,4 +1,5 @@
 from localization import Localizer
+from chart_security import plain_label, plotly_label
 import base64
 import io
 import math
@@ -130,6 +131,7 @@ def create_chart(
 
     for definition in definitions:
         entity, label, color = definition
+        label = plain_label(label)
 
         series = build_series(
             data, entity, source, metric
@@ -144,14 +146,14 @@ def create_chart(
             fig.add_trace(go.Bar(
                 x=series.index,
                 y=series.values,
-                name=label,
+                name=plotly_label(label),
                 marker_color=color
             ))
         else:
             fig.add_trace(go.Scatter(
                 x=series.index,
                 y=series.values,
-                name=label,
+                name=plotly_label(label),
                 mode="lines",
                 connectgaps=False,
                 line=dict(color=color, width=2)
@@ -189,14 +191,14 @@ def create_chart(
         ax.axhline(nominal, linestyle=":", color="#64748b")
 
     fig.update_layout(
-        title=title,
+        title=plotly_label(title),
         separators=", " if loc.language == "uk" else ".,",
         template="plotly_white",
         height=390,
         barmode="group",
         hovermode="x unified",
         margin=dict(l=55, r=20, t=60, b=85),
-        yaxis_title=ylabel,
+        yaxis_title=plotly_label(ylabel),
         legend=dict(
             orientation="h",
             y=-0.22
@@ -215,7 +217,7 @@ def create_chart(
         pad=12
     )
 
-    ax.set_ylabel(ylabel)
+    ax.set_ylabel(plain_label(ylabel))
     from matplotlib.ticker import FuncFormatter
     ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: loc.number(value, 6).rstrip("0").rstrip("," if loc.language == "uk" else ".")))
 

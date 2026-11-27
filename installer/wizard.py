@@ -7,6 +7,7 @@ container until the original application has been safely ported and tested.
 from __future__ import annotations
 import argparse
 import getpass
+import warnings
 import json
 import os
 import re
@@ -17,6 +18,8 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+from ha_connection import validate_url, rest_open
 I18N = {
     "en": {
         "title":"SOLAR ENERGY ANALYTICS — Setup Wizard",
@@ -78,11 +81,14 @@ I18N = {
 
 
 def prompt(message: str, default: str | None = None) -> str:
-    try:
-        value = input(message).strip()
-    except EOFError as exc:
-        raise RuntimeError("An interactive terminal is required") from exc
+    value = input(message).strip()
     return value or (default or "")
+
+
+def hidden_input(message: str) -> str:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        return getpass.getpass(message).strip()
 
 
 def select_language(choice: str) -> str:
@@ -121,17 +127,6 @@ def schedule_yaml(timezone: str, enabled: dict[str,bool]) -> str:
                   f'    cron: "{cron}"',f'    period: {period}']
     return '\n'.join(lines)+'\n'
 
-def validate_url(url: str) -> str:
-    parsed = urlparse(url)
-    try:
-        parsed.port
-    except ValueError as exc:
-        raise ValueError("Invalid port") from exc
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
-        raise ValueError("Expected http(s)://hostname[:port] without credentials or path")
-    return url.rstrip("/")
-
-
 def validate_email(value: str) -> str:
     if not re.fullmatch(r"[^\s@,]+@[^\s@,]+\.[^\s@,]+", value):
         raise ValueError("Expected a single email address")
@@ -161,8 +156,7 @@ def validate_tz(value: str) -> str:
 
 
 def check_api(url: str, token: str) -> None:
-    req = urllib.request.Request(url + '/api/', headers={"Authorization": "Bearer " + token, "Accept":"application/json"})
-    with urllib.request.urlopen(req, timeout=10) as response:
+    with rest_open(url, "/api/", token, timeout=10) as response:
         if response.status != 200:
             raise RuntimeError(f"HTTP {response.status}")
         obj = json.load(response)
@@ -186,6 +180,20 @@ def create_exclusive(path: Path, content: str | bytes, mode: int = 0o600) -> Non
 
 
 def main() -> int:
+    try:
+        return _main()
+    except (KeyboardInterrupt, EOFError):
+        print(I18N['en']['abort'], file=sys.stderr)
+        return 130
+    except Exception:
+        print(
+            I18N['en']['invalid'] + "[INSTALLATION_ERROR]",
+            file=sys.stderr
+        )
+        return 2
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser(description="Generate a private Solar Energy Analytics configuration")
     ap.add_argument('--sensor-preview',action='store_true',help='Discover and select sensors without writing files')
     ap.add_argument('--dry-run',action='store_true',help='Prompt but do not write files')
@@ -207,14 +215,14 @@ def main() -> int:
         import yaml
         default_url = 'http://127.0.0.1:8123'
         try:
-            urllib.request.urlopen(default_url+'/api/', timeout=2).close()
+            rest_open(default_url, '/api/', timeout=2).close()
         except urllib.error.HTTPError as exc:
             if exc.code != 401: default_url = None
         except OSError: default_url = None
         while True:
             try:
                 ha_url=validate_url(prompt(('Адреса Home Assistant' if lang=='uk' else 'Home Assistant URL')+(f' [{default_url}]' if default_url else '')+': ',default_url))
-                token=getpass.getpass(t['ha_token']).strip()
+                token=hidden_input(t['ha_token'])
                 if not token: raise ValueError('Empty token')
                 check_api(ha_url, token)
                 states, metadata = discover(ha_url, token)
@@ -253,7 +261,7 @@ def main() -> int:
             if not smtp['username']:raise ValueError('SMTP username required')
             smtp['sender']=validate_email(prompt(t['sender'],smtp['username']))
             smtp['recipient']=validate_email(prompt(t['recipient']))
-            smtp['password']=getpass.getpass(t['password']).strip()
+            smtp['password']=hidden_input(t['password'])
             if not smtp['password']:raise ValueError('SMTP password required')
         sensor_path=ROOT/'config/sensors.yaml'
         if args.dry_run:
@@ -263,7 +271,7 @@ def main() -> int:
         secret_dir=ROOT/'secrets'
         secret_dir.mkdir(mode=0o700,exist_ok=True)
         os.chmod(secret_dir,0o700)
-        for directory in ('reports','logs','state'):(ROOT/directory).mkdir(exist_ok=True)
+        for directory in ('reports','logs','state'):(ROOT/directory).mkdir(mode=0o700,exist_ok=True)
         env=(f'TZ={tz}\nHA_URL={ha_url}\nHA_TOKEN_FILE=/run/secrets/ha_token\n'
              f'REPORT_TIMEZONE={tz}\nREPORT_LANGUAGE={report_lang}\n'
              f'INVERTER_PROFILE={inverter_profile}\n'
@@ -289,12 +297,12 @@ def main() -> int:
         print(t['complete'])
 
         return 0
-    except (ValueError,RuntimeError) as exc:
-        print(t['invalid']+str(exc),file=sys.stderr)
-        return 2
-    except (KeyboardInterrupt,EOFError):
-        print('\n'+t['abort'],file=sys.stderr)
+    except (KeyboardInterrupt, EOFError):
+        print('\n'+t['abort'], file=sys.stderr)
         return 130
+    except Exception:
+        print(t['invalid']+"[INSTALLATION_ERROR]", file=sys.stderr)
+        return 2
 
 if __name__=='__main__':
     sys.exit(main())

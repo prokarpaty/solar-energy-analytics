@@ -2,11 +2,12 @@ import os
 import json
 import math
 import yaml
-import websocket
+from ha_connection import validate_url, connect_websocket
 from sensor_validation import validate_configuration
-from unit_normalization import normalize_rows
+from unit_normalization import normalize_rows, response_unit
 
 from pathlib import Path
+from secret_reader import read_secret
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -23,7 +24,10 @@ CONFIG = yaml.safe_load(
 
 
 def get_period(report_type, now=None):
-    now = now or datetime.now(TZ)
+    now = datetime.now(TZ) if now is None else now
+    if now.utcoffset() is None:
+        raise ValueError("Report reference time must be timezone-aware")
+    now = now.astimezone(TZ)
 
     today = now.replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -59,34 +63,50 @@ def get_period(report_type, now=None):
     else:
         raise ValueError(f"Unknown report: {report_type}")
 
+    expected_hours(start, end)
     return start, end
 
 
 class HAClient:
 
     def __init__(self):
-        self.url = os.environ["HA_URL"].rstrip("/")
+        self.url = validate_url(os.environ["HA_URL"])
 
-        self.token = Path(
+        self.token = read_secret(
             os.environ["HA_TOKEN_FILE"]
-        ).read_text().strip()
+        )
 
         self.ws = None
         self.request_id = 0
 
-    def __enter__(self):
-        url = (
-            self.url.replace("https://", "wss://", 1)
-                    .replace("http://", "ws://", 1)
-            + "/api/websocket"
-        )
+    def _close(self):
+        ws = self.ws
+        self.ws = None
 
-        self.ws = websocket.create_connection(
-            url, timeout=120
-        )
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        try:
+            self.ws = connect_websocket(
+                self.url, timeout=120
+            )
+        except Exception:
+            raise RuntimeError(
+                "HA WebSocket connection failed"
+            ) from None
 
         try:
-            json.loads(self.ws.recv())
+            greeting = json.loads(self.ws.recv())
+
+            if not isinstance(greeting, dict):
+                raise RuntimeError("Invalid greeting")
+
+            if greeting.get("type") != "auth_required":
+                raise RuntimeError("Unexpected greeting")
 
             self.ws.send(json.dumps({
                 "type": "auth",
@@ -95,18 +115,27 @@ class HAClient:
 
             result = json.loads(self.ws.recv())
 
+            if not isinstance(result, dict):
+                raise RuntimeError("Invalid authentication reply")
+
             if result.get("type") != "auth_ok":
-                raise RuntimeError("HA authentication failed")
+                raise RuntimeError("Authentication rejected")
 
             return self
 
         except Exception:
-            self.ws.close()
+            self._close()
+
+            raise RuntimeError(
+                "HA authentication failed"
+            ) from None
+
+        except BaseException:
+            self._close()
             raise
 
     def __exit__(self, *args):
-        if self.ws:
-            self.ws.close()
+        self._close()
 
     def request(self, command, **kwargs):
         self.request_id += 1
@@ -117,20 +146,27 @@ class HAClient:
             **kwargs
         }
 
-        self.ws.send(json.dumps(message))
+        try:
+            self.ws.send(json.dumps(message))
 
-        while True:
-            result = json.loads(self.ws.recv())
+            while True:
+                result = json.loads(self.ws.recv())
 
-            if result.get("id") != self.request_id:
-                continue
+                if not isinstance(result, dict):
+                    raise RuntimeError("Invalid HA response")
 
-            if not result.get("success"):
-                raise RuntimeError(
-                    json.dumps(result.get("error"))
-                )
+                if result.get("id") != self.request_id:
+                    continue
 
-            return result["result"]
+                if not result.get("success"):
+                    raise RuntimeError("HA rejected request")
+
+                return result["result"]
+
+        except Exception:
+            raise RuntimeError(
+                "HA API request failed"
+            ) from None
 
     def statistics(self, sensors, start, end, types):
         return self.request(
@@ -152,22 +188,31 @@ def numeric(value):
 
 
 def expected_hours(start, end):
-    return set(range(
-        int(start.timestamp() * 1000),
-        int(end.timestamp() * 1000),
-        3600000
-    ))
+    if start.utcoffset() is None or end.utcoffset() is None:
+        raise ValueError("Reporting boundaries must be timezone-aware")
+    first, last = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+    if any(value.astimezone(timezone.utc).minute or value.second or value.microsecond
+           for value in (start, end)):
+        raise ValueError("Hourly statistics require UTC-hour-aligned boundaries")
+    if last <= first or (last - first) % 3600000:
+        raise ValueError("Reporting period must contain positive whole hours")
+    return set(range(first, last, 3600000))
 
 
 def valid_rows(rows, start, end):
     expected = expected_hours(start, end)
-
-    return {
-        row["start"]: row
-        for row in rows
-        if row.get("start") in expected
-        and row.get("end") == row["start"] + 3600000
-    }
+    records = {}
+    conflicts = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = row.get("start")
+        if not numeric(key) or key not in expected or row.get("end") != key + 3600000:
+            continue
+        if key in records and records[key] != row:
+            conflicts.add(key)
+        records[key] = row
+    return {key: row for key, row in records.items() if key not in conflicts}
 
 
 def summarize_energy(rows, start, end):
@@ -256,7 +301,19 @@ def summarize_energy(rows, start, end):
         cumulative_total, 3
     )
 
+    # Each observed change must agree with the cumulative movement
+    # since the preceding available counter sample.
+    local_consistency = all(
+        not numeric(current.get("change")) or (
+            numeric(previous.get("sum")) and numeric(current.get("sum"))
+            and math.isclose(current["sum"] - previous["sum"], current["change"],
+                             rel_tol=0.000001, abs_tol=0.01)
+        )
+        for previous, current in zip(ordered, ordered[1:])
+    )
     consistent = (
+        local_consistency
+        and
         decreases == 0
         and len(sums) == len(ordered)
         and cumulative_total >= -0.000001
@@ -341,6 +398,9 @@ def collect_report(report_type, now=None):
 
         registry = {m["statistic_id"]: m for m in ha.request("recorder/list_statistic_ids")}
         energy, energy_units, measurement_units, warnings = validate_configuration(CONFIG, registry)
+        # Fail closed if the unqualified API response scale is ambiguous.
+        for sensor, unit in {**energy_units, **measurement_units}.items():
+            response_unit(registry[sensor], unit)
         measurements = sorted(measurement_units)
         for warning in warnings:
             print(f"[WARNING] {warning}")

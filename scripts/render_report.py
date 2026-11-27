@@ -1,6 +1,14 @@
-import json
+import sys
+from report_loader import load_validated_report
+from report_validation import ReportValidationError
 import argparse
 from localization import Localizer
+from secure_files import write_private
+from report_integrity import (
+    create_manifest,
+    write_manifest,
+    manifest_path
+)
 from installation_config import load_installation
 from report_sections import apply_sections
 
@@ -9,6 +17,7 @@ from datetime import datetime, timedelta
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
+from pdf_security import RestrictedPDFFetcher
 from plotly.offline import get_plotlyjs
 
 from report_charts import generate_charts
@@ -257,8 +266,14 @@ def equipment_rows(profile, loc):
 def render(source, language=None):
     source = Path(source)
 
-    data = json.loads(
-        source.read_text(encoding="utf-8")
+    integrity_path = manifest_path(source)
+
+    language = Localizer(language).language
+
+    data, dataset_identity = load_validated_report(
+        source,
+        energy_mapping=CONFIG.get("energy"),
+        with_identity=True
     )
 
     profile = load_installation()
@@ -289,7 +304,7 @@ def render(source, language=None):
         plotly_js=get_plotlyjs() if "charts" in context["section_numbers"] else ""
     )
 
-    html_path.write_text(html, encoding="utf-8")
+    html_bytes = html.encode("utf-8")
 
     print("Rendering PDF...")
 
@@ -299,11 +314,37 @@ def render(source, language=None):
         plotly_js=""
     )
 
-    HTML(string=pdf_html).write_pdf(pdf_path)
+    pdf_bytes = HTML(
+        string=pdf_html,
+        url_fetcher=RestrictedPDFFetcher()
+    ).write_pdf()
+
+    print("Preparing report integrity manifest...")
+
+    manifest = create_manifest(
+        data,
+        dataset_identity,
+        language,
+        pdf_bytes=pdf_bytes,
+        html_bytes=html_bytes
+    )
+
+    # All rendering and manifest validation must succeed
+    # before modifying the previously published bundle.
+
+    print("Publishing report bundle...")
+
+    integrity_path.unlink(missing_ok=True)
+
+    write_private(html_path, html_bytes)
+    write_private(pdf_path, pdf_bytes)
+
+    # The manifest is the final publication marker.
+    write_manifest(source, manifest)
 
     print("\n=== REPORT COMPLETED ===")
 
-    for path in (html_path, pdf_path):
+    for path in (html_path, pdf_path, integrity_path):
         print(f"[OK] {path}")
         print(f"     {path.stat().st_size:,} bytes")
 
@@ -315,4 +356,22 @@ if __name__ == "__main__":
     parser.add_argument("source")
     parser.add_argument("--language", choices=("en", "uk"))
     args = parser.parse_args()
-    render(args.source, args.language)
+    try:
+        render(args.source, args.language)
+
+    except ReportValidationError:
+        print(
+            "[ERROR] Report dataset validation failed",
+            file=sys.stderr
+        )
+        raise SystemExit(2) from None
+
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+
+    except Exception:
+        print(
+            "[ERROR] Report rendering failed",
+            file=sys.stderr
+        )
+        raise SystemExit(1) from None

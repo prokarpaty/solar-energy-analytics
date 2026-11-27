@@ -1,17 +1,34 @@
 import os
 import ssl
-import json
 import smtplib
 import argparse
 import logging
 
 from pathlib import Path
+from secret_reader import read_secret
+from report_loader import load_validated_report
+from report_integrity import (
+    IntegrityError,
+    load_manifest,
+    verify_manifest
+)
+from attachment_security import read_attachment
+from email_security import MAX_RAW_ATTACHMENT_BYTES
+from report_validation import ReportValidationError
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from email.message import EmailMessage
+from email_security import (
+    validate_mailbox,
+    validate_recipients,
+    validate_subject,
+    validate_attachment_filename,
+    validate_attachment_size,
+)
 from email.utils import formatdate, make_msgid
 from html import escape
 from localization import Localizer
+from secure_files import write_private, PrivateFileHandler
 
 
 TZ = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Europe/Kyiv"))
@@ -96,11 +113,11 @@ def build_email(data, language=None):
             <td style="padding:12px;text-align:right;
                        font-weight:bold;color:{color};
                        border-bottom:1px solid #e2e8f0">
-                {value}
+                {escape(value)}
             </td>
             <td style="padding:12px;text-align:right;
                        border-bottom:1px solid #e2e8f0">
-                {coverage}%
+                {escape(coverage)}%
             </td>
         </tr>
         """)
@@ -140,7 +157,7 @@ def build_email(data, language=None):
         <div style="background:#fffbeb;
                     border-left:4px solid #d97706;
                     padding:16px;margin:20px 0">
-            <strong>{t('email.t4')}</strong>
+            <strong>{escape(t('email.t4'))}</strong>
             <ul>
         """
 
@@ -173,37 +190,37 @@ def build_email(data, language=None):
             </div>
 
             <h1 style="font-size:26px;margin:12px 0">
-                ☀ {t('email.t5')}
+                ☀ {escape(t('email.t5'))}
             </h1>
 
-            <p>{title}</p>
+            <p>{escape(title)}</p>
 
-            <p style="color:#cbd5e1">{period}</p>
+            <p style="color:#cbd5e1">{escape(period)}</p>
 
         </div>
 
         <div style="padding:24px">
 
-            <p>{t('email.t6')}</p>
+            <p>{escape(t('email.t6'))}</p>
 
             <p>
-                {t('email.t7')}
+                {escape(t('email.t7'))}
             </p>
 
-            <h2>{t('email.t8')}</h2>
+            <h2>{escape(t('email.t8'))}</h2>
 
             <table style="width:100%;border-collapse:collapse;
                           font-size:14px">
 
                 <tr style="background:#10233d;color:white">
                     <th style="padding:12px;text-align:left">
-                        {t('email.t9')}
+                        {escape(t('email.t9'))}
                     </th>
                     <th style="padding:12px;text-align:right">
-                        {unit}
+                        {escape(unit)}
                     </th>
                     <th style="padding:12px;text-align:right">
-                        {t('email.t10')}
+                        {escape(t('email.t10'))}
                     </th>
                 </tr>
 
@@ -217,17 +234,17 @@ def build_email(data, language=None):
 
             {warning_html}
 
-            <h2>{t('email.t11')}</h2>
+            <h2>{escape(t('email.t11'))}</h2>
 
-            <p>{t('email.t12')}</p>
+            <p>{escape(t('email.t12'))}</p>
 
             <ul>
-                <li>{t('email.t13')}</li>
-                <li>{t('email.t14')}</li>
+                <li>{escape(t('email.t13'))}</li>
+                <li>{escape(t('email.t14'))}</li>
             </ul>
 
             <p>
-                {t('email.t15')}
+                {escape(t('email.t15'))}
             </p>
 
         </div>
@@ -235,14 +252,14 @@ def build_email(data, language=None):
         <div style="background:#f8fafc;padding:20px;
                     color:#64748b;font-size:12px">
 
-            <p>{t('email.t16')}</p>
+            <p>{escape(t('email.t16'))}</p>
 
-            <p>{t('email.t17')} {now:%d.%m.%Y %H:%M}</p>
+            <p>{escape(t('email.t17'))} {now:%d.%m.%Y %H:%M}</p>
 
-            <p>{t('email.t18')} {escape(str(tz))}</p>
+            <p>{escape(t('email.t18'))} {escape(str(tz))}</p>
 
             <p>
-                {t('email.t19')}
+                {escape(t('email.t19'))}
             </p>
 
         </div>
@@ -273,34 +290,75 @@ def build_email(data, language=None):
 def build_message(source, language=None, preview=False):
     source = Path(source)
 
-    if not source.is_file():
-        raise FileNotFoundError(source)
+    language = Localizer(language).language
 
-    data = json.loads(
-        source.read_text(encoding="utf-8")
+    data, dataset_identity = load_validated_report(
+        source,
+        with_identity=True
     )
+
+    manifest = load_manifest(source)
 
     attachments = [
         (source.with_suffix(".pdf"), "application", "pdf"),
         (source.with_suffix(".html"), "text", "html")
     ]
 
-    for path, _, _ in attachments:
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"Report attachment missing: {path}"
-            )
+    verified_attachments = []
+    remaining = MAX_RAW_ATTACHMENT_BYTES
 
-    recipients = [address.strip() for address in os.getenv("SMTP_TO", "").split(",") if address.strip()]
-    if not preview and not recipients:
-        raise RuntimeError("No SMTP recipients configured")
+    for path, maintype, subtype in attachments:
+
+        filename = validate_attachment_filename(path.name)
+
+        payload = read_attachment(
+            path,
+            maximum=remaining
+        )
+
+        remaining -= len(payload)
+
+        verified_attachments.append(
+            (filename, maintype, subtype, payload)
+        )
+
+    validate_attachment_size(
+        len(payload)
+        for _, _, _, payload in verified_attachments
+    )
+
+    # Verify the exact attachment bytes that will be
+    # included in the MIME message. Never reopen attachments.
+    attachment_payloads = {
+        subtype: payload
+        for _, _, subtype, payload in verified_attachments
+    }
+
+    if not verify_manifest(
+        manifest,
+        data,
+        dataset_identity,
+        language,
+        pdf_bytes=attachment_payloads["pdf"],
+        html_bytes=attachment_payloads["html"]
+    ):
+        raise IntegrityError("Report integrity verification failed")
+
+    logger.info("Report bundle integrity verified")
+
+    if preview:
+        sender = validate_mailbox("preview@example.invalid")
+        recipients = validate_recipients("preview@example.invalid")
+    else:
+        sender = validate_mailbox(os.environ["SMTP_FROM"])
+        recipients = validate_recipients(os.environ["SMTP_TO"])
     subject, plain, html = build_email(data, language)
 
     message = EmailMessage()
 
-    message["Subject"] = subject
-    message["From"] = "preview@example.invalid" if preview else os.environ["SMTP_FROM"]
-    message["To"] = "preview@example.invalid" if preview else ", ".join(recipients)
+    message["Subject"] = validate_subject(subject)
+    message["From"] = sender
+    message["To"] = recipients
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = make_msgid(
         domain="solar-reports.local"
@@ -309,19 +367,19 @@ def build_message(source, language=None, preview=False):
     message.set_content(plain)
     message.add_alternative(html, subtype="html")
 
-    for path, maintype, subtype in attachments:
+    for filename, maintype, subtype, payload in verified_attachments:
 
         message.add_attachment(
-            path.read_bytes(),
+            payload,
             maintype=maintype,
             subtype=subtype,
-            filename=path.name
+            filename=filename
         )
 
         logger.info(
             "Attachment: %s | %.2f MB",
-            path.name,
-            path.stat().st_size / 1024**2
+            filename,
+            len(payload) / 1024**2
         )
 
     message_size = len(message.as_bytes())
@@ -342,53 +400,83 @@ def build_message(source, language=None, preview=False):
 def preview_report(source, language=None):
     message = build_message(source, language, preview=True)
     path = Path(source).with_suffix(".eml")
-    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
-        handle.write(message.as_bytes())
-    path.chmod(0o600)
+    write_private(path, message.as_bytes(), exclusive=True)
     return path
+
+
+class DeliveryError(RuntimeError):
+    def __init__(self, outcome, reason):
+        super().__init__(reason)
+        self.outcome = outcome
+
+
+DELIVERY_EXIT = {"retry": 20, "failed": 21, "unknown": 22}
+
+
+def classify_smtp(exc, submitting):
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        codes = [value[0] for value in exc.recipients.values()]
+        return "retry" if codes and all(400 <= c < 500 for c in codes) else "failed"
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return "failed"
+    if isinstance(exc, smtplib.SMTPResponseException):
+        if not submitting or isinstance(exc, (smtplib.SMTPDataError, smtplib.SMTPSenderRefused)):
+            return "retry" if 400 <= exc.smtp_code < 500 else "failed"
+        return "unknown"
+    if submitting:
+        return "unknown"
+    if isinstance(exc, (smtplib.SMTPNotSupportedError, ssl.SSLError)):
+        return "failed"
+    if isinstance(exc, (OSError, smtplib.SMTPServerDisconnected)):
+        return "retry"
+    return "failed"
 
 
 def send_report(source, language=None):
     if os.environ.get("SMTP_ENABLED", "").lower() != "true":
-        raise RuntimeError("SMTP delivery is disabled")
-    logging.getLogger().addHandler(logging.FileHandler("/app/logs/email-delivery.log", encoding="utf-8"))
-    source = Path(source)
-    message = build_message(source, language)
-    username = os.environ["SMTP_USERNAME"]
-    password = Path(os.environ["SMTP_PASSWORD_FILE"]).read_text().strip()
-
-    logger.info("Sending report: %s", source.name)
-
-    with smtplib.SMTP(
-        os.environ["SMTP_HOST"],
-        int(os.environ["SMTP_PORT"]),
-        timeout=60
-    ) as smtp:
-
-        smtp.ehlo()
-
-        smtp.starttls(
-            context=ssl.create_default_context()
-        )
-
-        smtp.ehlo()
-
-        smtp.login(username, password)
-
-        refused = smtp.send_message(message)
-
-        if refused:
-            raise RuntimeError(
-                "One or more recipients were rejected"
-            )
-
-    logger.info(
-        "SUCCESS | %s | Message-ID: %s",
-        source.name,
-        message["Message-ID"]
-    )
-
-    print("\n=== REPORT ACCEPTED BY GMAIL SMTP ===")
+        raise DeliveryError("failed", "SMTP delivery is disabled")
+    handler = None
+    smtp = None
+    submitting = False
+    try:
+        try:
+            source = Path(source)
+            message = build_message(source, language)
+            username = os.environ["SMTP_USERNAME"]
+            password = read_secret(os.environ["SMTP_PASSWORD_FILE"])
+            host = os.environ["SMTP_HOST"]
+            port = int(os.environ["SMTP_PORT"])
+            if not all((username.strip(), password, host.strip(), str(message["From"]).strip())) or not 1 <= port <= 65535:
+                raise ValueError("Invalid SMTP settings")
+            handler = PrivateFileHandler("/app/logs/email-delivery.log", encoding="utf-8")
+            logging.getLogger().addHandler(handler)
+        except Exception as exc:
+            raise DeliveryError("failed", f"Email preparation failed ({type(exc).__name__})") from None
+        try:
+            smtp = smtplib.SMTP(host, port, timeout=60)
+            smtp.ehlo()
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.ehlo()
+            smtp.login(username, password)
+            submitting = True
+            refused = smtp.send_message(message)
+            if refused:
+                raise DeliveryError("unknown", "Partial recipient acceptance")
+        except DeliveryError:
+            raise
+        except Exception as exc:
+            raise DeliveryError(classify_smtp(exc, submitting), f"SMTP failure ({type(exc).__name__})") from None
+        logger.info("SUCCESS | %s | Message-ID: %s", source.name, message["Message-ID"])
+        print("\n=== REPORT ACCEPTED BY SMTP SERVER ===")
+    finally:
+        if smtp is not None:
+            try:
+                smtp.close()
+            except Exception:
+                pass
+        if handler is not None:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
 
 
 if __name__ == "__main__":
@@ -411,6 +499,17 @@ if __name__ == "__main__":
             print(preview_report(args.source, args.language))
         else:
             send_report(args.source, args.language)
+    except DeliveryError as exc:
+        logger.error("Delivery %s: %s", exc.outcome, exc)
+        raise SystemExit(DELIVERY_EXIT[exc.outcome])
+    except ReportValidationError:
+        logger.error("Report dataset validation failed")
+        raise SystemExit(2)
+    except IntegrityError:
+        logger.error("Report bundle integrity verification failed")
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
     except Exception:
-        logger.exception("Email delivery failed")
+        logger.error("Email operation failed")
         raise SystemExit(1)

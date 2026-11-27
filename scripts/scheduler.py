@@ -1,7 +1,8 @@
 import os
 import re
 import sys
-import json
+from report_loader import load_validated_report
+from report_paths import secure_report_directory
 import time
 import yaml
 import signal
@@ -14,9 +15,9 @@ import fcntl
 from pathlib import Path
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from logging.handlers import RotatingFileHandler
+from secure_files import PrivateRotatingFileHandler, private_append, private_database
 
-from ha_client import get_period, CONFIG as SENSORS
+from ha_client import get_period, CONFIG as SENSORS, TZ as REPORT_TZ, numeric, valid_rows
 
 
 BASE = Path("/app")
@@ -35,6 +36,8 @@ CONFIG = yaml.safe_load(
 )
 
 TZ = ZoneInfo(CONFIG["timezone"])
+if TZ.key != REPORT_TZ.key:
+    raise ValueError("Schedule timezone must match REPORT_TIMEZONE")
 SETTINGS = CONFIG["scheduler"]
 
 CHECK_INTERVAL = SETTINGS["check_interval_seconds"]
@@ -52,7 +55,7 @@ logging.basicConfig(
     format="%(asctime)s UTC | %(levelname)s | %(message)s",
     handlers=[
         logging.StreamHandler(),
-        RotatingFileHandler(
+        PrivateRotatingFileHandler(
             LOGS / "scheduler.log",
             maxBytes=5 * 1024 * 1024,
             backupCount=5,
@@ -79,7 +82,7 @@ signal.signal(signal.SIGINT, stop_handler)
 
 
 def connect():
-    conn = sqlite3.connect(DB, timeout=30)
+    conn = private_database(DB, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -212,12 +215,12 @@ def recover_interrupted_jobs(conn):
 
     conn.execute("""
         UPDATE jobs
-        SET status = 'retry',
+        SET status = CASE WHEN attempts >= ? THEN 'failed' ELSE 'retry' END,
             next_attempt = 0,
             updated_at = ?,
             last_error = 'Interrupted during generation'
         WHERE status = 'generating'
-    """, (now().isoformat(),))
+    """, (MAX_ATTEMPTS, now().isoformat()))
 
     conn.execute("""
         UPDATE jobs
@@ -300,8 +303,8 @@ def enqueue_jobs(conn):
             )
 
             ready_at = (
-                scheduled + timedelta(minutes=DELAY)
-            ).timestamp()
+                scheduled
+            ).timestamp() + DELAY * 60
 
             cursor = conn.execute("""
                 INSERT OR IGNORE INTO jobs (
@@ -360,20 +363,34 @@ def run_script(script, *args):
         *map(str, args)
     ]
 
-    log.info("Executing %s", " ".join(command))
+    log.info("Executing %s", script)
 
     subprocess.run(
         command,
         check=True,
-        timeout=1800
+        timeout=1800,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
     )
 
 
-def statistics_ready(source):
+def statistics_ready(source, *, expected=None):
 
-    data = json.loads(
-        source.read_text(encoding="utf-8")
+    data = load_validated_report(
+        source, energy_mapping=SENSORS["energy"]
     )
+
+    if expected is not None:
+        report_type, scheduled = expected
+        start, end = get_period(report_type, now=scheduled)
+
+        if (
+            data["report_type"] != report_type
+            or data["timezone"] != REPORT_TZ.key
+            or datetime.fromisoformat(data["start"]) != start
+            or datetime.fromisoformat(data["end"]) != end
+        ):
+            raise ValueError("Scheduled report identity mismatch")
 
     end = datetime.fromisoformat(data["end"])
 
@@ -391,19 +408,43 @@ def statistics_ready(source):
 
         rows = raw.get(entity, [])
 
+        valid = valid_rows(rows, datetime.fromtimestamp(last_hour / 1000, TZ), end)
         found = any(
-            row.get("start") == last_hour
-            and row.get("end") == last_hour + 3600000
-            and isinstance(
-                row.get("change"), (int, float)
-            )
-            for row in rows
+            numeric(row.get("change"))
+            and row["change"] >= 0
+            for row in valid.values()
         )
-
         if not found:
             missing.append(name)
 
     return missing
+
+
+def validate_job_identity(job, scheduled):
+    if scheduled.tzinfo is None:
+        raise ValueError("Invalid scheduled timestamp")
+
+    local = scheduled.astimezone(TZ)
+
+    if (
+        local.hour or local.minute
+        or local.second or local.microsecond
+        or local > now()
+        or not is_scheduled(job["report_type"], local)
+    ):
+        raise ValueError("Invalid scheduled report period")
+
+    report_id, expected_source = report_details(
+        job["report_type"], local
+    )
+
+    if (
+        job["report_id"] != report_id
+        or Path(job["source"]) != expected_source
+    ):
+        raise ValueError("Invalid scheduled report path")
+
+    secure_report_directory(expected_source.parent)
 
 
 def process_job(conn, job):
@@ -411,17 +452,23 @@ def process_job(conn, job):
     report_id = job["report_id"]
     source = Path(job["source"])
 
-    attempts = job["attempts"] + 1
+    if STOP or not CONFIG["reports"].get(job["report_type"], {}).get("enabled"):
+        return
+    if os.getenv("SMTP_ENABLED", "").lower() != "true":
+        return
 
-    conn.execute("""
-        UPDATE jobs
-        SET attempts = ?
-        WHERE report_id = ?
-    """, (attempts, report_id))
-
+    # Claim and increment in a single durable transaction.
+    cursor = conn.execute("""
+        UPDATE jobs SET attempts = attempts + 1, status = 'generating',
+            updated_at = ?, last_error = NULL
+        WHERE report_id = ? AND status IN ('pending', 'retry')
+            AND attempts < ? AND next_attempt <= ?
+    """, (now().isoformat(), report_id, MAX_ATTEMPTS, time.time()))
     conn.commit()
-
-    update_job(conn, report_id, "generating")
+    if not cursor.rowcount:
+        return
+    attempts = conn.execute("SELECT attempts FROM jobs WHERE report_id = ?",
+                            (report_id,)).fetchone()[0]
 
     log.info(
         "Processing %s | attempt %d/%d",
@@ -434,13 +481,18 @@ def process_job(conn, job):
             job["scheduled_at"]
         )
 
+        validate_job_identity(job, scheduled)
+
         run_script(
             "generate_report.py",
             "--type", job["report_type"],
             "--as-of", scheduled.date()
         )
 
-        missing = statistics_ready(source)
+        missing = statistics_ready(
+            source,
+            expected=(job["report_type"], scheduled)
+        )
 
         if missing and attempts < MAX_ATTEMPTS:
 
@@ -474,15 +526,25 @@ def process_job(conn, job):
 
         if STOP:
             update_job(
-                conn, report_id, "retry",
+                conn, report_id, "failed" if attempts >= MAX_ATTEMPTS else "retry",
                 "Shutdown before sending"
             )
             return
 
     except Exception as exc:
 
-        log.exception(
-            "Report generation failed: %s",
+        if isinstance(exc, subprocess.TimeoutExpired):
+            error = "Report subprocess timed out"
+        elif isinstance(exc, subprocess.CalledProcessError):
+            error = "Report subprocess failed"
+        elif isinstance(exc, OSError):
+            error = "Report filesystem or process error"
+        else:
+            error = "Report generation failed"
+
+        log.error(
+            "%s: %s",
+            error,
             report_id
         )
 
@@ -492,7 +554,7 @@ def process_job(conn, job):
                 conn,
                 report_id,
                 "retry",
-                str(exc),
+                error,
                 time.time() + RETRY * 60
             )
 
@@ -502,11 +564,14 @@ def process_job(conn, job):
                 conn,
                 report_id,
                 "failed",
-                str(exc)
+                error
             )
 
         return
 
+    import_delivery_history(conn)
+    if conn.execute("SELECT status FROM jobs WHERE report_id = ?", (report_id,)).fetchone()[0] == "sent":
+        return
     update_job(conn, report_id, "sending")
 
     try:
@@ -528,18 +593,14 @@ def process_job(conn, job):
         """, (report_id,)).fetchone()["status"]
 
         if status != "sent":
-
-            update_job(
-                conn,
-                report_id,
-                "unknown",
-                str(exc)
-            )
-
-            log.exception(
-                "SMTP delivery requires review: %s",
-                report_id
-            )
+            code = exc.returncode if isinstance(exc, subprocess.CalledProcessError) else None
+            outcome = {20: "retry", 21: "failed", 22: "unknown"}.get(code, "unknown")
+            if outcome == "retry" and attempts >= MAX_ATTEMPTS:
+                outcome = "failed"
+            update_job(conn, report_id, outcome,
+                       f"SMTP subprocess outcome: {code}",
+                       time.time() + RETRY * 60 if outcome == "retry" else 0)
+            log.warning("SMTP delivery %s: %s", outcome, report_id)
 
         return
 
@@ -610,6 +671,7 @@ def show_schedule():
 
 
 def main():
+    os.umask(0o077)
 
     parser = argparse.ArgumentParser()
 
@@ -636,7 +698,7 @@ def main():
             show_status(conn)
         return
 
-    lock = (STATE / "scheduler.lock").open("a")
+    lock = private_append(STATE / "scheduler.lock")
 
     try:
         fcntl.flock(
@@ -673,10 +735,10 @@ def main():
 
                 enqueue_jobs(conn)
 
-                job = conn.execute("""
+                job = next((row for row in conn.execute("""
                     SELECT * FROM jobs
                     WHERE status IN ('pending', 'retry')
-                      AND next_attempt <= ?
+                      AND next_attempt <= ? AND attempts < ?
                     ORDER BY scheduled_at,
                         CASE report_type
                             WHEN 'daily' THEN 1
@@ -686,8 +748,9 @@ def main():
                             WHEN 'yearly' THEN 5
                             ELSE 6
                         END
-                    LIMIT 1
-                """, (time.time(),)).fetchone()
+                """, (time.time(), MAX_ATTEMPTS))
+                    if CONFIG["reports"].get(row["report_type"], {}).get("enabled")
+                    and os.getenv("SMTP_ENABLED", "").lower() == "true"), None)
 
                 if job:
 
@@ -696,7 +759,7 @@ def main():
 
             except Exception:
 
-                log.exception("Scheduler loop failed")
+                log.error("Scheduler loop failed")
 
             for _ in range(CHECK_INTERVAL):
 

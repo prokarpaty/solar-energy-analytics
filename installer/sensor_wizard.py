@@ -2,17 +2,25 @@
 import json
 import sys
 from pathlib import Path
-from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+from ha_connection import rest_open, connect_websocket
 from sensor_discovery import candidates
 from sensor_validation import ENERGY_ROLES, REQUIRED_ENERGY, validate_configuration, measurement_target
 
 
 def discover(url, token):
-    import websocket
-    with urlopen(Request(url + '/api/states', headers={'Authorization': 'Bearer '+token}), timeout=30) as response:
+    try:
+        return _discover(url, token)
+    except Exception:
+        raise RuntimeError(
+            "HA sensor discovery failed"
+        ) from None
+
+
+def _discover(url, token):
+    with rest_open(url, '/api/states', token, timeout=30) as response:
         states = json.load(response)
-    ws = websocket.create_connection(('wss' if url.startswith('https:') else 'ws') + url[url.index(':'):] + '/api/websocket', timeout=30)
+    ws = connect_websocket(url, timeout=30)
     try:
         if json.loads(ws.recv()).get('type') != 'auth_required': raise RuntimeError('Unexpected WebSocket response')
         ws.send(json.dumps({'type':'auth','access_token':token}))
@@ -23,7 +31,11 @@ def discover(url, token):
             if reply.get('id') == 1: break
         if not reply.get('success'): raise RuntimeError('Historical statistics discovery failed')
         return states, reply['result']
-    finally: ws.close()
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
 
 
 def configure(states, metadata, lang='en', ask=input, show=print, existing=None):
@@ -96,7 +108,7 @@ def configure(states, metadata, lang='en', ask=input, show=print, existing=None)
         for path in roles:
             entity=get(existing,path)
             if entity and compatible(path,entity): put(config,path,entity)
-            elif entity: show(tr('Excluded incompatible mapping: ','Виключено несумісну прив’язку: ')+str(entity))
+            elif entity: show(tr('Excluded incompatible mapping: ','Виключено несумісну прив’язку: ')+'.'.join(path))
     def review():
         for i,path in enumerate(roles,1): show(f'{i:02d}. {".".join(path)}: {get(config,path) or tr("not mapped","не зіставлено")}')
     def edit():
