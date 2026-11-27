@@ -1,12 +1,26 @@
-# Porting checklist before the first usable release
+# Release and migration validation
 
-1. Keep `/opt/solar-reports` unchanged. Create a clean Git clone at `/opt/solar-reports-dev`.
-2. Copy only vetted source assets: `Dockerfile`, `requirements.txt`, `scripts/*.py`, `templates/*.html`, sanitized Compose. **Never copy `.env`, `secrets`, `reports`, `state`, `logs`, backups, live database or other private files.**
-3. Review source files for embedded emails, IP addresses, tokens, personal names, location-specific labels, and private dashboard links. Use a secret scanner and manual code review before first push.
-4. Make `config/sensors.yaml` configurable with robust validation. Support missing battery/phase metrics, multiple battery counts, correct unit conversions, and alternate inverter naming. Initial production config assumes a specific 76-sensor Deye installation and cannot be used as a generic profile.
-5. Add translations to the reporting engine and templates; only the **wizard** is bilingual in this starter.
-6. Replace hard-coded scheduler calendars with validated cron schedule parsing; preserve Kyiv/UTC DST behavior and SQLite deduplication.
-7. Add Docker Compose and secure per-install volumes, so users can opt into SMTP and retain generated reports. Avoid placing secrets in image layers.
-8. Add CI, unit tests and a completely clean-host install + restore test before publication as a functioning release.
-9. Handle report retention, graceful shutdown, SMTP unknown outcomes, incomplete data and HA WebSocket connectivity.
-10. Publish to GitHub only after a privacy review. Start with a private repository or review branch if possible.
+This document records the completed checks and the remaining follow-up work for the first public release of Solar Energy Analytics.
+
+## Verified November 27, 2026
+
+- The isolated Ubuntu 24.04 installation completed from a fresh repository clone and the bilingual wizard.
+- Home Assistant authentication, automatic Deye mapping, daily report generation, interactive HTML, PDF and report manifest were verified.
+- A real Gmail SMTP report was successfully delivered and confirmed received from the isolated VM.
+- The production Home Assistant host migrated from /opt/solar-reports to /opt/solar-energy-analytics, while keeping the old deployment available for rollback.
+- Production settings, secrets and a full report archive were retained. Six historical successful-delivery records were preserved; the scheduler database integrity check returned OK.
+- The new production scheduler started successfully without errors. The former production container remained stopped.
+- GitHub Actions passed for the develop branch and merged main commit.
+
+## Known limitations and follow-up validation
+
+- Verify the first automatically scheduled email on the migrated production deployment and check its attachments.
+- A previous-version rollback and forward upgrade across changing configurations and database schemas have not been exercised as a full disaster-recovery drill.
+- Backups created by maintenance.sh omit reports, and private configuration/state restoration is manual.
+- Trivy CI currently blocks fixable HIGH/CRITICAL findings, not all unfixed vulnerabilities; review remaining findings before public publication.
+- GitHub repository history must be assessed for secret/private-data exposure before switching visibility to public.
+- The source currently supports a verified Deye naming profile; other inverters and naming conventions may require manual configuration or code changes.
+- Delivery send_time is a minimum scheduled release time, not a guarantee of mailbox arrival.
+- The new production installation currently retains its existing midnight-based schedule until separately reconfigured.
+
+Do not publish credentials, personal installation data, local network information, archived reports or state databases. Keep credentials in the private, gitignored installation directories.
