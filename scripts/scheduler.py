@@ -386,6 +386,8 @@ def statistics_ready(source):
     missing = []
 
     for name, entity in SENSORS["energy"].items():
+        if name not in data["energy"]:
+            continue
 
         rows = raw.get(entity, [])
 

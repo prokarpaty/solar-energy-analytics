@@ -256,6 +256,7 @@ button {
 </div>
 {% endfor %}
 
+{% if phases %}
 <h2>04. Якість електропостачання</h2>
 
 <table>
@@ -281,6 +282,8 @@ button {
 </tbody>
 </table>
 
+{% endif %}
+{% if battery_bank or batteries %}
 <h2>05. Акумуляторна система</h2>
 
 <table>
@@ -333,6 +336,8 @@ button {
 </table>
 {% endfor %}
 
+{% endif %}
+{% if temperatures %}
 <h2>06. Температурний моніторинг</h2>
 
 <table>
@@ -358,6 +363,7 @@ button {
 </tbody>
 </table>
 
+{% endif %}
 <h2>07. Попередження та якість даних</h2>
 
 {% for warning in warnings %}

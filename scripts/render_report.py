@@ -74,10 +74,12 @@ def build_context(data):
     days = (end.date() - start.date()).days
 
     energy = []
-    warnings = []
+    warnings = list(data.get("configuration_warnings", []))
     conclusions = []
 
     for key, (label, color) in ENERGY.items():
+        if key not in data["energy"]:
+            continue
         item = data["energy"].get(key, {})
 
         energy.append({
@@ -86,7 +88,7 @@ def build_context(data):
             "value": fmt(item.get("total")),
             "coverage": fmt(item.get("coverage", 0), 2) + "%",
             "status": STATUSES.get(
-                item.get("status"), "Невідомо"
+                item.get("status"), "Не налаштовано"
             )
         })
 

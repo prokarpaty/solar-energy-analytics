@@ -82,10 +82,12 @@ def build_email(data):
 
     rows = []
     plain_rows = []
-    warnings = []
+    warnings = list(data.get("configuration_warnings", []))
 
     for key, (label, color) in ENERGY_NAMES.items():
 
+        if key not in data["energy"]:
+            continue
         item = data["energy"].get(key, {})
 
         value = fmt(item.get("total"))

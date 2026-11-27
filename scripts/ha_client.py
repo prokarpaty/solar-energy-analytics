@@ -3,7 +3,7 @@ import json
 import math
 import yaml
 import websocket
-from sensor_validation import validate, measurement_target
+from sensor_validation import validate_configuration
 from unit_normalization import normalize_rows
 
 from pathlib import Path
@@ -333,44 +333,6 @@ def extract_sensors(value):
 def collect_report(report_type, now=None):
     start, end = get_period(report_type, now=now)
 
-    energy = {k: v for k, v in CONFIG["energy"].items() if isinstance(v, str) and v.startswith("sensor.")}
-
-    measurement_sections = [
-        "power",
-        "grid",
-        "house",
-        "battery_bank",
-        "batteries",
-        "temperature"
-    ]
-
-    measurements = set()
-
-    for section in measurement_sections:
-        measurements.update(
-            extract_sensors(CONFIG.get(section, {}))
-        )
-
-    measurements = sorted(
-        sensor for sensor in measurements
-        if not sensor.endswith("_cycles")
-        and not sensor.endswith("_life_cycles")
-    )
-
-    def walk(value, path):
-        if isinstance(value, dict):
-            for key, child in value.items():
-                yield from walk(child, path + [key])
-        elif isinstance(value, str) and value in measurements:
-            yield value, measurement_target(path)
-
-    targets = {}
-    for section in measurement_sections:
-        for sensor, target in walk(CONFIG.get(section, {}), [section]):
-            if sensor in targets and targets[sensor] != target:
-                raise ValueError(f"Conflicting roles for {sensor}")
-            targets[sensor] = target
-
     energy_raw = {}
     measurement_raw = {}
 
@@ -378,8 +340,10 @@ def collect_report(report_type, now=None):
     with HAClient() as ha:
 
         registry = {m["statistic_id"]: m for m in ha.request("recorder/list_statistic_ids")}
-        energy_units = {sensor: validate(registry.get(sensor), "kWh", True) for sensor in energy.values()}
-        measurement_units = {sensor: validate(registry.get(sensor), targets[sensor]) for sensor in measurements}
+        energy, energy_units, measurement_units, warnings = validate_configuration(CONFIG, registry)
+        measurements = sorted(measurement_units)
+        for warning in warnings:
+            print(f"[WARNING] {warning}")
         cursor = start.astimezone(timezone.utc)
         finish = end.astimezone(timezone.utc)
 
@@ -443,6 +407,7 @@ def collect_report(report_type, now=None):
             for sensor in measurements
         },
 
+        **({"configuration_warnings": warnings} if warnings else {}),
         "raw": {
             "energy": energy_raw,
             "measurements": measurement_raw
