@@ -2,7 +2,7 @@
 
 Self-hosted Home Assistant solar-energy reporting with an English/Ukrainian installation wizard, scheduled reports, interactive HTML, PDF and optional SMTP email. Designed for Deye inverters with configurable Home Assistant energy and measurement entities; availability of individual charts depends on mapped sensors and recorder statistics.
 
-**Status:** release candidate on `develop`. Not yet a public v1.0.0 release. Keep the repository private until final release review.
+**Status:** v1.0.0 release candidate merged into `main`; production migration and clean-machine installation validated. GitHub release publication and repository visibility change are separate final steps. Automated scheduled delivery on the migrated production version is awaiting its next scheduled run.
 
 ## Requirements
 
@@ -60,7 +60,7 @@ If `docker-compose-v2` is unavailable from your Ubuntu repositories, follow the 
 
 ### 2. Verify Home Assistant connectivity / Перевірка Home Assistant
 
-Substitute **your own Home Assistant server IP address** in this example (the address below is a private-LAN example, not an automatic discovery setting):
+Substitute **your Home Assistant server's LAN address** in this example (the loopback address below works only if Home Assistant runs on this same machine):
 
 ```bash
 curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
@@ -71,7 +71,7 @@ An HTTP `401` response is expected for an unauthenticated API request and confir
 
 ### 3. Clone and install / Клонування та встановлення
 
-While this repository remains private, the machine must have a GitHub SSH key authorized to access it.
+The SSH clone command requires an authorized GitHub SSH key; after the repository is made public, HTTPS cloning can also be used.
 
 ```bash
 git clone git@github.com:prokarpaty/solar-energy-analytics.git
