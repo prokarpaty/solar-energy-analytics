@@ -295,9 +295,9 @@ def _main() -> int:
                 )
 
         print(
-            '\\n=== Підсумок налаштування ==='
+            '\n=== Підсумок налаштування ==='
             if lang == 'uk' else
-            '\\n=== Configuration summary ==='
+            '\n=== Configuration summary ==='
         )
 
         print(yaml.safe_dump({

@@ -56,11 +56,17 @@ case "${1:---check}" in
         ;;
 
     --start)
-        if [[ -f docker-compose.yml || -f docker-compose.yaml || -f compose.yaml || -f compose.yml ]]; then
-            echo "[ERROR] Existing Compose configuration detected."
-            echo "Use a separate release installation directory."
-            exit 1
-        fi
+        STATE_DIR="$(realpath state)"
+        RUNNING_IDS="$("${DOCKER[@]}" ps -q)"
+
+        for cid in $RUNNING_IDS; do
+            mounts="$("${DOCKER[@]}" inspect                 --format '{{range .Mounts}}{{println .Source}}{{end}}'                 "$cid")"
+
+            if grep -Fxq "$STATE_DIR" <<< "$mounts"; then
+                echo "[ERROR] State directory already used by a running container."
+                exit 1
+            fi
+        done
 
         check_config
         compose up -d --no-build
