@@ -7,6 +7,7 @@ container until the original application has been safely ported and tested.
 from __future__ import annotations
 import argparse
 import getpass
+import warnings
 import json
 import os
 import re
@@ -17,11 +18,16 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+from ha_connection import validate_url, rest_open
+from email_security import validate_mailbox, validate_recipients
+import ui
+from schedule_times import parse_send_time
 I18N = {
     "en": {
         "title":"SOLAR ENERGY ANALYTICS — Setup Wizard",
         "language":"Choose language / Оберіть мову: 1) English  2) Українська [1]: ",
-        "welcome":"Configuration-only preview. No Docker deployment or email will occur.",
+        "welcome":"Configure your solar reporting installation. Docker deployment is a separate step.",
         "ha_url":"Home Assistant URL (e.g. http://192.168.1.100:8123): ",
         "ha_token":"Home Assistant long-lived access token (hidden): ",
         "timezone":"Timezone [Europe/Kyiv]: ",
@@ -49,7 +55,7 @@ I18N = {
     "uk": {
         "title":"SOLAR ENERGY ANALYTICS — Майстер налаштування",
         "language":"Choose language / Оберіть мову: 1) English  2) Українська [1]: ",
-        "welcome":"Попередній майстер налаштування. Docker не запускається, листи не надсилаються.",
+        "welcome":"Налаштування системи сонячної аналітики. Розгортання Docker виконується окремо.",
         "ha_url":"Адреса Home Assistant (наприклад http://192.168.1.100:8123): ",
         "ha_token":"Довготривалий токен Home Assistant (приховано): ",
         "timezone":"Часовий пояс [Europe/Kyiv]: ",
@@ -78,11 +84,14 @@ I18N = {
 
 
 def prompt(message: str, default: str | None = None) -> str:
-    try:
-        value = input(message).strip()
-    except EOFError as exc:
-        raise RuntimeError("An interactive terminal is required") from exc
+    value = ui.ask(message).strip()
     return value or (default or "")
+
+
+def hidden_input(message: str) -> str:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        return ui.secret(message, getpass.getpass).strip()
 
 
 def select_language(choice: str) -> str:
@@ -106,8 +115,9 @@ def yesno(value: str, default: bool = False) -> bool:
     raise ValueError('Expected yes/no (y/n)')
 
 
-def schedule_yaml(timezone: str, enabled: dict[str,bool]) -> str:
-    # This is intentionally compatible with the current fixed-calendar scheduler.
+def schedule_yaml(timezone: str, enabled: dict[str,bool], times: dict[str,str] | None = None) -> str:
+    # Report periods remain anchored to midnight, regardless of delivery time.
+    times = {} if times is None else times
     lines = ['timezone: '+timezone, 'scheduler:', '  check_interval_seconds: 60',
              '  statistics_delay_minutes: 10', '  retry_interval_minutes: 15',
              '  max_attempts: 5', '  catch_up: true', '  catch_up_days: 7', 'reports:']
@@ -117,20 +127,12 @@ def schedule_yaml(timezone: str, enabled: dict[str,bool]) -> str:
                  'quarterly':('0 0 1 1,4,7,10 *','previous_quarter'),
                  'yearly':('0 0 1 1 *','previous_year')}
     for typ,(cron,period) in schedules.items():
+        send_time = times.get(typ, '00:00')
+        parse_send_time(send_time)
         lines += [f'  {typ}:',f"    enabled: {str(enabled[typ]).lower()}",
-                  f'    cron: "{cron}"',f'    period: {period}']
+                  f'    cron: "{cron}"',f'    period: {period}',
+                  f'    send_time: "{send_time}"']
     return '\n'.join(lines)+'\n'
-
-def validate_url(url: str) -> str:
-    parsed = urlparse(url)
-    try:
-        parsed.port
-    except ValueError as exc:
-        raise ValueError("Invalid port") from exc
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
-        raise ValueError("Expected http(s)://hostname[:port] without credentials or path")
-    return url.rstrip("/")
-
 
 def validate_email(value: str) -> str:
     if not re.fullmatch(r"[^\s@,]+@[^\s@,]+\.[^\s@,]+", value):
@@ -161,8 +163,7 @@ def validate_tz(value: str) -> str:
 
 
 def check_api(url: str, token: str) -> None:
-    req = urllib.request.Request(url + '/api/', headers={"Authorization": "Bearer " + token, "Accept":"application/json"})
-    with urllib.request.urlopen(req, timeout=10) as response:
+    with rest_open(url, "/api/", token, timeout=10) as response:
         if response.status != 200:
             raise RuntimeError(f"HTTP {response.status}")
         obj = json.load(response)
@@ -186,7 +187,22 @@ def create_exclusive(path: Path, content: str | bytes, mode: int = 0o600) -> Non
 
 
 def main() -> int:
+    try:
+        return _main()
+    except (KeyboardInterrupt, EOFError):
+        print(I18N['en']['abort'], file=sys.stderr)
+        return 130
+    except Exception:
+        print(
+            I18N['en']['invalid'] + "[INSTALLATION_ERROR]",
+            file=sys.stderr
+        )
+        return 2
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser(description="Generate a private Solar Energy Analytics configuration")
+    ap.add_argument('--sensor-preview',action='store_true',help='Discover and select sensors without writing files')
     ap.add_argument('--dry-run',action='store_true',help='Prompt but do not write files')
     ap.add_argument('--check',action='store_true',help='Validate existing configuration, no secrets displayed')
     args=ap.parse_args()
@@ -196,21 +212,62 @@ def main() -> int:
         return 0 if all(p.exists() for p in required) else 1
     lang=select_language(prompt(I18N['en']['language']))
     t=I18N[lang]
-    print('\n'+t['title']+'\n'+t['welcome']+'\n')
+    ui.banner(lang)
+    ui.message(t['welcome'])
     existing=[p for p in (ROOT/'.env',ROOT/'secrets/ha_token',ROOT/'secrets/smtp_password',ROOT/'config/sensors.yaml',ROOT/'config/schedule.yaml') if p.exists()]
-    if existing and not args.dry_run:
+    if existing and not (args.dry_run or args.sensor_preview):
         print(t['exists'])
         return 2
     try:
-        ha_url=validate_url(prompt(t['ha_url']))
-        token=getpass.getpass(t['ha_token']).strip()
-        if not token or '\n' in token or '\r' in token: raise ValueError('Empty or malformed token')
+        ui.section(1, 7, 'Home Assistant connection', 'Підключення Home Assistant', lang)
+        from sensor_wizard import discover, configure
+        from profile_wizard import configure_profile
+        import yaml
+        default_url = 'http://127.0.0.1:8123'
+        try:
+            rest_open(default_url, '/api/', timeout=2).close()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401: default_url = None
+        except OSError: default_url = None
+        while True:
+            try:
+                ha_url=validate_url(prompt(('Адреса Home Assistant' if lang=='uk' else 'Home Assistant URL')+(f' [{default_url}]' if default_url else '')+': ',default_url))
+                token=hidden_input(t['ha_token'])
+                if not token: raise ValueError('Empty token')
+                check_api(ha_url, token)
+                states, metadata = discover(ha_url, token)
+                break
+            except (OSError, ValueError, RuntimeError) as exc:
+                print(t['api_fail']+type(exc).__name__)
+                if prompt('1) Retry / Повторити  0) Cancel / Скасувати [1]: ','1') != '1': return 2
+        ui.message('[OK] ' + t['api_ok'])
+        ui.section(2, 7, 'Sensor discovery and mapping', 'Пошук і прив’язка датчиків', lang)
+        existing_path=ROOT/'config/sensors.yaml'
+        previous=yaml.safe_load(existing_path.read_text()) if existing_path.exists() else None
+        mapping = yaml.safe_dump(configure(states, metadata, lang, ask=ui.ask, show=ui.message, existing=previous), allow_unicode=True, sort_keys=False)
+        print(mapping)
+        if args.sensor_preview:
+            print(t['dryrun'])
+            return 0
+        if not yesno(prompt('Confirm mappings? / Підтвердити прив’язки? y/N: ')):
+            return 2
+        ui.section(3, 7, 'Regional and report settings', 'Мова та часовий пояс', lang)
         tz=validate_tz(prompt(t['timezone'],'Europe/Kyiv'))
         report_lang=select_language(prompt(t['report_language'], '2' if lang=='uk' else '1'))
-        inv_choice=prompt(t['inverter'],'1')
-        if inv_choice not in ('1','2'):raise ValueError('Expected 1 or 2')
-        inverter_profile='deye' if inv_choice=='1' else 'custom'
+        inverter_profile='deye'
+        ui.section(4, 7, 'Installation and equipment', 'Установка та обладнання', lang)
+        profile = configure_profile(
+            ROOT/'config/installation.example.yaml',
+            lang, ask=ui.ask, show=ui.message
+        )
+        profile_yaml = yaml.safe_dump(
+            profile,
+            allow_unicode=True,
+            sort_keys=False
+        )
+        ui.section(5, 7, 'Report schedules', 'Розклад звітів', lang)
         schedule_enabled={}
+        schedule_times={}
         names={'daily':('Daily','Щоденні'),'weekly':('Weekly','Щотижневі'),
                'monthly':('Monthly','Щомісячні'),'quarterly':('Quarterly','Щоквартальні'),
                'yearly':('Yearly','Річні')}
@@ -218,6 +275,26 @@ def main() -> int:
             default=typ!='quarterly'
             title=(uk if lang=='uk' else en)
             schedule_enabled[typ]=yesno(prompt(t['schedule'].format(name=title,default='Y/n' if default else 'y/N')),default)
+            if schedule_enabled[typ]:
+                while True:
+                    question = (
+                        f'Час надсилання {title.lower()} (HH:MM, {tz}) [08:00]: '
+                        if lang == 'uk' else
+                        f'Send time for {title.lower()} reports (HH:MM, {tz}) [08:00]: '
+                    )
+                    send_time = prompt(question, '08:00')
+                    try:
+                        parse_send_time(send_time)
+                    except ValueError:
+                        ui.message(
+                            'Введіть час у форматі HH:MM, наприклад 08:00.'
+                            if lang == 'uk' else
+                            'Enter a 24-hour time, e.g. 08:00.'
+                        )
+                        continue
+                    schedule_times[typ] = send_time
+                    break
+        ui.section(6, 7, 'Email delivery', 'Електронна пошта', lang)
         smtp_enabled=yesno(prompt(t['email']))
         smtp={}
         if smtp_enabled:
@@ -226,21 +303,57 @@ def main() -> int:
             if not 1 <= smtp['port'] <= 65535: raise ValueError('SMTP port out of range')
             smtp['username']=prompt(t['username'])
             if not smtp['username']:raise ValueError('SMTP username required')
-            smtp['sender']=validate_email(prompt(t['sender'],smtp['username']))
-            smtp['recipient']=validate_email(prompt(t['recipient']))
-            smtp['password']=getpass.getpass(t['password']).strip()
+            smtp['sender']=validate_mailbox(
+                prompt(t['sender'],smtp['username'])
+            ).addr_spec
+            smtp['recipient']=",".join(
+                address.addr_spec for address in
+                validate_recipients(prompt(t['recipient']))
+            )
+            smtp['password']=hidden_input(t['password'])
             if not smtp['password']:raise ValueError('SMTP password required')
-        sensor_path=validate_relative_sensor_path(prompt(t['sensor'],'config/sensors.yaml'))
-        if sensor_path != ROOT/'config/sensors.yaml':
-            raise ValueError('Custom mapping paths are not yet supported in the starter')
-        print(t['sensor_warning'])
-        if yesno(prompt(t['check'])):
-            try:
-                check_api(ha_url,token)
-                print(t['api_ok'])
-            except Exception as exc:
-                print(t['api_fail']+str(exc))
-                if not yesno(prompt('Continue anyway? / Продовжити? y/N: ')):return 2
+        if smtp_enabled:
+            from smtp_check import check_smtp
+
+            if yesno(prompt(
+                'Перевірити SMTP без надсилання листа? Y/n: '
+                if lang == 'uk' else
+                'Test SMTP without sending email? Y/n: '
+            ), True):
+                check_smtp(smtp)
+                print(
+                    '[OK] SMTP авторизація успішна'
+                    if lang == 'uk' else
+                    '[OK] SMTP authentication successful'
+                )
+
+        ui.summary({
+            'installation': profile['installation']['name'],
+            'home_assistant': ha_url,
+            'timezone': tz,
+            'report_language': report_lang,
+            'reports': schedule_enabled,
+            'report_times': schedule_times,
+            'smtp_enabled': smtp_enabled,
+            'smtp_host': smtp.get('host', ''),
+            'smtp_port': smtp.get('port', 587),
+        }, lang)
+
+        if not yesno(prompt(
+            'Підтвердити налаштування? y/N: '
+            if lang == 'uk' else
+            'Confirm configuration? y/N: '
+        )):
+            return 2
+
+        sensor_path=ROOT/'config/sensors.yaml'
+        profile_path=ROOT/'config/installation.yaml'
+
+        if not args.dry_run and (
+            profile_path.exists() or profile_path.is_symlink()
+        ):
+            print(t['exists'])
+            return 2
         if args.dry_run:
             print(t['dryrun'])
             return 0
@@ -248,8 +361,7 @@ def main() -> int:
         secret_dir=ROOT/'secrets'
         secret_dir.mkdir(mode=0o700,exist_ok=True)
         os.chmod(secret_dir,0o700)
-        for directory in ('reports','logs','state'):(ROOT/directory).mkdir(exist_ok=True)
-        mapping='''# Replace the example entity IDs with your own Home Assistant sensors.\n# Keep the exact sections expected by the reporting engine.\nenergy:\n  production: sensor.REPLACE_ME_SOLAR_ENERGY\n  consumption: sensor.REPLACE_ME_LOAD_ENERGY\n  grid_import: sensor.REPLACE_ME_GRID_IMPORT_ENERGY\n  grid_export: sensor.REPLACE_ME_GRID_EXPORT_ENERGY\n  battery_charge: sensor.REPLACE_ME_BATTERY_CHARGE_ENERGY\n  battery_discharge: sensor.REPLACE_ME_BATTERY_DISCHARGE_ENERGY\n  inverter_losses: sensor.REPLACE_ME_INVERTER_LOSSES_ENERGY\n'''
+        for directory in ('reports','logs','state'):(ROOT/directory).mkdir(mode=0o700,exist_ok=True)
         env=(f'TZ={tz}\nHA_URL={ha_url}\nHA_TOKEN_FILE=/run/secrets/ha_token\n'
              f'REPORT_TIMEZONE={tz}\nREPORT_LANGUAGE={report_lang}\n'
              f'INVERTER_PROFILE={inverter_profile}\n'
@@ -261,26 +373,39 @@ def main() -> int:
              f'SMTP_FROM={smtp.get("sender", "")}\nSMTP_TO={smtp.get("recipient", "")}\n'
              'SMTP_PASSWORD_FILE=/run/secrets/smtp_password\n'
              f'APP_UID={os.getuid()}\nAPP_GID={os.getgid()}\n')
+        for value in (
+            ha_url, tz, report_lang,
+            smtp.get('host', ''),
+            smtp.get('username', ''),
+            smtp.get('sender', ''),
+            smtp.get('recipient', '')
+        ):
+            if any(ord(c) < 32 or ord(c) == 127 for c in value):
+                raise ValueError('Invalid configuration value')
+            if any(c in value for c in ('$', '#', '"', "'", chr(92))):
+                raise ValueError('Unsupported environment value')
+
         written=[]
         try:
             for p, value, mode in ((ROOT/'.env',env,0o600),(secret_dir/'ha_token',token+'\n',0o600),
                                    (secret_dir/'smtp_password',(smtp.get('password') or '')+'\n',0o600),
                                    (sensor_path,mapping,0o600),
-                                   (ROOT/'config/schedule.yaml',schedule_yaml(tz,schedule_enabled),0o600)):
+                                   (ROOT/'config/schedule.yaml',schedule_yaml(tz,schedule_enabled,schedule_times),0o600),
+                                   (profile_path,profile_yaml,0o600)):
                 create_exclusive(p,value,mode)
                 written.append(p)
         except BaseException:
             for p in written:p.unlink(missing_ok=True)
             raise
-        print(t['complete'])
-        print('Next: edit config/sensors.yaml with your actual entities. Review docs/PORTING.md.')
+        ui.message('[OK] ' + t['complete'])
+
         return 0
-    except (ValueError,RuntimeError) as exc:
-        print(t['invalid']+str(exc),file=sys.stderr)
-        return 2
-    except (KeyboardInterrupt,EOFError):
-        print('\n'+t['abort'],file=sys.stderr)
+    except (KeyboardInterrupt, EOFError):
+        print('\n'+t['abort'], file=sys.stderr)
         return 130
+    except Exception:
+        print(t['invalid']+"[INSTALLATION_ERROR]", file=sys.stderr)
+        return 2
 
 if __name__=='__main__':
     sys.exit(main())

@@ -1,0 +1,103 @@
+name: Solar Energy Analytics CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Source and application validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate shell scripts
+        run: |
+          bash -n install.sh
+          bash -n deploy.sh
+          bash -n maintenance.sh
+          bash -n installer/bootstrap.sh
+
+      - name: Validate Python syntax
+        run: |
+          python3 -m compileall -q scripts installer tests
+
+      - name: Prepare synthetic configuration
+        run: |
+          umask 077
+          cp .env.example .env
+          cp config/sensors.example.yaml config/sensors.yaml
+          cp config/schedule.example.yaml config/schedule.yaml
+          cp config/installation.example.yaml config/installation.yaml
+
+          mkdir -p reports logs state secrets
+          chmod 700 reports logs state secrets
+
+          printf 'SYNTHETIC_CI_TOKEN\n' > secrets/ha_token
+          printf 'SYNTHETIC_CI_PASSWORD\n' > secrets/smtp_password
+
+          sed -i "s/^APP_UID=.*/APP_UID=$(id -u)/" .env
+          sed -i "s/^APP_GID=.*/APP_GID=$(id -g)/" .env
+
+      - name: Validate Docker Compose
+        run: |
+          docker compose -f compose.release.yaml config --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --network host \
+            -t solar-energy-analytics:ci .
+
+      - name: Run application regression
+        run: |
+          docker run --rm \
+            --network none \
+            --user "$(id -u):$(id -g)" \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
+            --memory 2g \
+            --cpus 2.0 \
+            --pids-limit 128 \
+            -e PYTHONUNBUFFERED=1 \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e REPORT_TIMEZONE=Europe/Kyiv \
+            -e REPORT_LANGUAGE=en \
+            -e SMTP_ENABLED=false \
+            -v "$PWD/scripts:/app/scripts:ro" \
+            -v "$PWD/tests:/app/tests:ro" \
+            -v "$PWD/installer:/app/installer:ro" \
+            -v "$PWD/config:/app/config:ro" \
+            -v "$PWD/templates:/app/templates:ro" \
+            -v "$PWD/locales:/app/locales:ro" \
+            -v "$PWD/reports:/app/reports:rw" \
+            -v "$PWD/logs:/app/logs:rw" \
+            -v "$PWD/state:/app/state:rw" \
+            --workdir /app \
+            --entrypoint python \
+            solar-energy-analytics:ci \
+            -m unittest discover -s /app/tests
+
+      - name: Scan Docker image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: solar-energy-analytics:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'

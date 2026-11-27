@@ -1,0 +1,50 @@
+services:
+  solar-reports:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host
+
+    image: solar-energy-analytics:local
+
+    restart: unless-stopped
+    init: true
+    network_mode: host
+
+    user: "${APP_UID:?APP_UID required}:${APP_GID:?APP_GID required}"
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./config:/app/config:ro
+      - ./scripts:/app/scripts:ro
+      - ./templates:/app/templates:ro
+      - ./locales:/app/locales:ro
+      - ./reports:/app/reports:rw
+      - ./logs:/app/logs:rw
+      - ./state:/app/state:rw
+      - ./secrets:/run/secrets:ro
+
+    read_only: true
+
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 128
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    command: ["python", "/app/scripts/scheduler.py"]
