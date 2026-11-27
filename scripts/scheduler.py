@@ -285,9 +285,6 @@ def enqueue_jobs(conn):
             microsecond=0
         )
 
-        if scheduled < activated:
-            continue
-
         if scheduled > current:
             continue
 
@@ -304,6 +301,9 @@ def enqueue_jobs(conn):
             )
 
             ready_at = delivery_ready_at(scheduled, config, DELAY)
+
+            if ready_at < activated.timestamp():
+                continue
 
             cursor = conn.execute("""
                 INSERT OR IGNORE INTO jobs (
@@ -650,18 +650,17 @@ def show_schedule():
                 microsecond=0
             )
 
-            if candidate <= current:
+            if not is_scheduled(report_type, candidate):
                 continue
 
-            if not is_scheduled(report_type, candidate):
+            ready_at = datetime.fromtimestamp(
+                delivery_ready_at(candidate, config, DELAY), TZ
+            )
+            if ready_at <= current:
                 continue
 
             report_id, _ = report_details(
                 report_type, candidate
-            )
-
-            ready_at = datetime.fromtimestamp(
-                delivery_ready_at(candidate, config, DELAY), TZ
             )
             print(
                 f"{report_type:12} {ready_at.isoformat()} | "
