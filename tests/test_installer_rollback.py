@@ -53,7 +53,7 @@ class InstallerRollback(unittest.TestCase):
                 "y",
                 "Europe/Kyiv",
                 "1",
-                "y", "y", "y", "n", "y",
+                "y", "08:00", "y", "08:00", "y", "08:00", "n", "y", "08:00",
                 "y",
                 "smtp.example.invalid",
                 "587",
