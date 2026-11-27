@@ -147,6 +147,37 @@ bash install.sh
 
 **UA:** Дотримуйтеся підказок двомовного майстра. Він запитує адресу Home Assistant і токен доступу, знаходить та зіставляє датчики, налаштовує дані електростанції, обладнання, оформлення, часовий пояс і мову звітів. Можна вибрати щоденні, щотижневі, щомісячні, щоквартальні та щорічні звіти, а також автоматичне надсилання через SMTP. Перевірка SMTP-автентифікації можлива без надсилання листа. Майстер перевіряє конфігурацію та окремо запитує дозвіл на побудову Docker-образу й запуск планувальника. Не запускайте другий планувальник, якщо інша інсталяція вже надсилає ті самі звіти.
 
+### Gmail SMTP setup / Налаштування Gmail SMTP
+
+**EN:** Gmail SMTP requires a **Google App Password**, not your regular Google account password. Before configuring email delivery:
+
+1. Open [Google Account Security](https://myaccount.google.com/security) and enable **2-Step Verification (2FA)**.
+2. Open [Google App Passwords](https://myaccount.google.com/apppasswords), create a password for Solar Energy Analytics, and copy the generated **16-character App Password**. App Passwords are available only for eligible accounts with 2-Step Verification enabled.
+3. In the installation wizard, use these SMTP values:
+
+   | Setting | Value |
+   |---|---|
+   | SMTP host | `smtp.gmail.com` |
+   | SMTP port | `587` |
+   | STARTTLS | Enabled |
+   | Username | Your full Gmail address |
+   | Password | **16-character App Password** (not the account password) |
+   | From | Your Gmail address |
+   | To | The recipient's email address |
+
+4. Test the SMTP connection in the wizard and enable scheduled email reports.
+
+**Important:** The Gmail address is still used as the SMTP **username**. Only the password changes: **regular Google username/password authentication is not supported for this setup**. Never paste the App Password into GitHub, source files or screenshots; store it only through the installer's private secrets configuration.
+
+**UA:** Для надсилання листів через Gmail SMTP потрібен **пароль застосунку Google**, а не звичайний пароль від Google-акаунта. Перед налаштуванням:
+
+1. Відкрийте [Безпека облікового запису Google](https://myaccount.google.com/security) та ввімкніть **двоетапну перевірку (2FA)**.
+2. Перейдіть до [Паролів застосунків Google](https://myaccount.google.com/apppasswords), створіть пароль для Solar Energy Analytics і скопіюйте згенерований **16-символьний пароль застосунку**. Ця функція доступна для відповідних облікових записів із увімкненою двоетапною перевіркою.
+3. У майстрі встановлення вкажіть SMTP-сервер `smtp.gmail.com`, порт `587`, увімкніть **STARTTLS**; як ім’я користувача введіть **повну адресу Gmail**, а як пароль — **16-символьний пароль застосунку**, а не основний пароль акаунта. Задайте адресу відправника та одержувача.
+4. Перевірте SMTP-з’єднання в майстрі й увімкніть надсилання звітів за розкладом.
+
+**Важливо:** Адреса Gmail використовується як **ім’я користувача SMTP**, але звичайний пароль Google для цього налаштування **не використовується**. Не додавайте пароль застосунку до GitHub, вихідного коду або скриншотів; зберігайте його тільки в приватних секретах інсталяції.
+
 ### Report delivery times / Час надсилання звітів
 
 **EN:** For each enabled report type, choose an optional local 24-hour send time, e.g. `08:00` (wizard default). The timezone comes from the wizard. Daily reports cover the previous day; weekly reports cover the previous Monday–Sunday; monthly, quarterly and yearly reports cover the previous completed calendar period. Sending starts no earlier than the later of the chosen time and the recorder-statistics delay (10 minutes by default). Collection, rendering, SMTP availability and retries can delay delivery. Changing send time does not change the period being reported.
