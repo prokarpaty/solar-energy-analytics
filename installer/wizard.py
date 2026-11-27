@@ -187,6 +187,7 @@ def create_exclusive(path: Path, content: str | bytes, mode: int = 0o600) -> Non
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Generate a private Solar Energy Analytics configuration")
+    ap.add_argument('--sensor-preview',action='store_true',help='Discover and select sensors without writing files')
     ap.add_argument('--dry-run',action='store_true',help='Prompt but do not write files')
     ap.add_argument('--check',action='store_true',help='Validate existing configuration, no secrets displayed')
     args=ap.parse_args()
@@ -198,18 +199,42 @@ def main() -> int:
     t=I18N[lang]
     print('\n'+t['title']+'\n'+t['welcome']+'\n')
     existing=[p for p in (ROOT/'.env',ROOT/'secrets/ha_token',ROOT/'secrets/smtp_password',ROOT/'config/sensors.yaml',ROOT/'config/schedule.yaml') if p.exists()]
-    if existing and not args.dry_run:
+    if existing and not (args.dry_run or args.sensor_preview):
         print(t['exists'])
         return 2
     try:
-        ha_url=validate_url(prompt(t['ha_url']))
-        token=getpass.getpass(t['ha_token']).strip()
-        if not token or '\n' in token or '\r' in token: raise ValueError('Empty or malformed token')
+        from sensor_wizard import discover, configure
+        import yaml
+        default_url = 'http://127.0.0.1:8123'
+        try:
+            urllib.request.urlopen(default_url+'/api/', timeout=2).close()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401: default_url = None
+        except OSError: default_url = None
+        while True:
+            try:
+                ha_url=validate_url(prompt(('Адреса Home Assistant' if lang=='uk' else 'Home Assistant URL')+(f' [{default_url}]' if default_url else '')+': ',default_url))
+                token=getpass.getpass(t['ha_token']).strip()
+                if not token: raise ValueError('Empty token')
+                check_api(ha_url, token)
+                states, metadata = discover(ha_url, token)
+                break
+            except (OSError, ValueError, RuntimeError) as exc:
+                print(t['api_fail']+type(exc).__name__)
+                if prompt('1) Retry / Повторити  0) Cancel / Скасувати [1]: ','1') != '1': return 2
+        print(t['api_ok'])
+        existing_path=ROOT/'config/sensors.yaml'
+        previous=yaml.safe_load(existing_path.read_text()) if existing_path.exists() else None
+        mapping = yaml.safe_dump(configure(states, metadata, lang, existing=previous), allow_unicode=True, sort_keys=False)
+        print(mapping)
+        if args.sensor_preview:
+            print(t['dryrun'])
+            return 0
+        if not yesno(prompt('Confirm mappings? / Підтвердити прив’язки? y/N: ')):
+            return 2
         tz=validate_tz(prompt(t['timezone'],'Europe/Kyiv'))
         report_lang=select_language(prompt(t['report_language'], '2' if lang=='uk' else '1'))
-        inv_choice=prompt(t['inverter'],'1')
-        if inv_choice not in ('1','2'):raise ValueError('Expected 1 or 2')
-        inverter_profile='deye' if inv_choice=='1' else 'custom'
+        inverter_profile='deye'
         schedule_enabled={}
         names={'daily':('Daily','Щоденні'),'weekly':('Weekly','Щотижневі'),
                'monthly':('Monthly','Щомісячні'),'quarterly':('Quarterly','Щоквартальні'),
@@ -230,17 +255,7 @@ def main() -> int:
             smtp['recipient']=validate_email(prompt(t['recipient']))
             smtp['password']=getpass.getpass(t['password']).strip()
             if not smtp['password']:raise ValueError('SMTP password required')
-        sensor_path=validate_relative_sensor_path(prompt(t['sensor'],'config/sensors.yaml'))
-        if sensor_path != ROOT/'config/sensors.yaml':
-            raise ValueError('Custom mapping paths are not yet supported in the starter')
-        print(t['sensor_warning'])
-        if yesno(prompt(t['check'])):
-            try:
-                check_api(ha_url,token)
-                print(t['api_ok'])
-            except Exception as exc:
-                print(t['api_fail']+str(exc))
-                if not yesno(prompt('Continue anyway? / Продовжити? y/N: ')):return 2
+        sensor_path=ROOT/'config/sensors.yaml'
         if args.dry_run:
             print(t['dryrun'])
             return 0
@@ -249,7 +264,6 @@ def main() -> int:
         secret_dir.mkdir(mode=0o700,exist_ok=True)
         os.chmod(secret_dir,0o700)
         for directory in ('reports','logs','state'):(ROOT/directory).mkdir(exist_ok=True)
-        mapping='''# Replace the example entity IDs with your own Home Assistant sensors.\n# Keep the exact sections expected by the reporting engine.\nenergy:\n  production: sensor.REPLACE_ME_SOLAR_ENERGY\n  consumption: sensor.REPLACE_ME_LOAD_ENERGY\n  grid_import: sensor.REPLACE_ME_GRID_IMPORT_ENERGY\n  grid_export: sensor.REPLACE_ME_GRID_EXPORT_ENERGY\n  battery_charge: sensor.REPLACE_ME_BATTERY_CHARGE_ENERGY\n  battery_discharge: sensor.REPLACE_ME_BATTERY_DISCHARGE_ENERGY\n  inverter_losses: sensor.REPLACE_ME_INVERTER_LOSSES_ENERGY\n'''
         env=(f'TZ={tz}\nHA_URL={ha_url}\nHA_TOKEN_FILE=/run/secrets/ha_token\n'
              f'REPORT_TIMEZONE={tz}\nREPORT_LANGUAGE={report_lang}\n'
              f'INVERTER_PROFILE={inverter_profile}\n'
@@ -273,7 +287,7 @@ def main() -> int:
             for p in written:p.unlink(missing_ok=True)
             raise
         print(t['complete'])
-        print('Next: edit config/sensors.yaml with your actual entities. Review docs/PORTING.md.')
+
         return 0
     except (ValueError,RuntimeError) as exc:
         print(t['invalid']+str(exc),file=sys.stderr)
