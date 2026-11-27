@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 from ha_connection import validate_url, rest_open
 from email_security import validate_mailbox, validate_recipients
+import ui
 I18N = {
     "en": {
         "title":"SOLAR ENERGY ANALYTICS — Setup Wizard",
@@ -82,14 +83,14 @@ I18N = {
 
 
 def prompt(message: str, default: str | None = None) -> str:
-    value = input(message).strip()
+    value = ui.ask(message).strip()
     return value or (default or "")
 
 
 def hidden_input(message: str) -> str:
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
-        return getpass.getpass(message).strip()
+        return ui.secret(message, getpass.getpass).strip()
 
 
 def select_language(choice: str) -> str:
@@ -206,12 +207,14 @@ def _main() -> int:
         return 0 if all(p.exists() for p in required) else 1
     lang=select_language(prompt(I18N['en']['language']))
     t=I18N[lang]
-    print('\n'+t['title']+'\n'+t['welcome']+'\n')
+    ui.banner(lang)
+    ui.message(t['welcome'])
     existing=[p for p in (ROOT/'.env',ROOT/'secrets/ha_token',ROOT/'secrets/smtp_password',ROOT/'config/sensors.yaml',ROOT/'config/schedule.yaml') if p.exists()]
     if existing and not (args.dry_run or args.sensor_preview):
         print(t['exists'])
         return 2
     try:
+        ui.section(1, 7, 'Home Assistant connection', 'Підключення Home Assistant', lang)
         from sensor_wizard import discover, configure
         from profile_wizard import configure_profile
         import yaml
@@ -232,28 +235,32 @@ def _main() -> int:
             except (OSError, ValueError, RuntimeError) as exc:
                 print(t['api_fail']+type(exc).__name__)
                 if prompt('1) Retry / Повторити  0) Cancel / Скасувати [1]: ','1') != '1': return 2
-        print(t['api_ok'])
+        ui.message('[OK] ' + t['api_ok'])
+        ui.section(2, 7, 'Sensor discovery and mapping', 'Пошук і прив’язка датчиків', lang)
         existing_path=ROOT/'config/sensors.yaml'
         previous=yaml.safe_load(existing_path.read_text()) if existing_path.exists() else None
-        mapping = yaml.safe_dump(configure(states, metadata, lang, existing=previous), allow_unicode=True, sort_keys=False)
+        mapping = yaml.safe_dump(configure(states, metadata, lang, ask=ui.ask, show=ui.message, existing=previous), allow_unicode=True, sort_keys=False)
         print(mapping)
         if args.sensor_preview:
             print(t['dryrun'])
             return 0
         if not yesno(prompt('Confirm mappings? / Підтвердити прив’язки? y/N: ')):
             return 2
+        ui.section(3, 7, 'Regional and report settings', 'Мова та часовий пояс', lang)
         tz=validate_tz(prompt(t['timezone'],'Europe/Kyiv'))
         report_lang=select_language(prompt(t['report_language'], '2' if lang=='uk' else '1'))
         inverter_profile='deye'
+        ui.section(4, 7, 'Installation and equipment', 'Установка та обладнання', lang)
         profile = configure_profile(
             ROOT/'config/installation.example.yaml',
-            lang
+            lang, ask=ui.ask, show=ui.message
         )
         profile_yaml = yaml.safe_dump(
             profile,
             allow_unicode=True,
             sort_keys=False
         )
+        ui.section(5, 7, 'Report schedules', 'Розклад звітів', lang)
         schedule_enabled={}
         names={'daily':('Daily','Щоденні'),'weekly':('Weekly','Щотижневі'),
                'monthly':('Monthly','Щомісячні'),'quarterly':('Quarterly','Щоквартальні'),
@@ -262,6 +269,7 @@ def _main() -> int:
             default=typ!='quarterly'
             title=(uk if lang=='uk' else en)
             schedule_enabled[typ]=yesno(prompt(t['schedule'].format(name=title,default='Y/n' if default else 'y/N')),default)
+        ui.section(6, 7, 'Email delivery', 'Електронна пошта', lang)
         smtp_enabled=yesno(prompt(t['email']))
         smtp={}
         if smtp_enabled:
@@ -294,13 +302,7 @@ def _main() -> int:
                     '[OK] SMTP authentication successful'
                 )
 
-        print(
-            '\n=== Підсумок налаштування ==='
-            if lang == 'uk' else
-            '\n=== Configuration summary ==='
-        )
-
-        print(yaml.safe_dump({
+        ui.summary({
             'installation': profile['installation']['name'],
             'home_assistant': ha_url,
             'timezone': tz,
@@ -308,8 +310,8 @@ def _main() -> int:
             'reports': schedule_enabled,
             'smtp_enabled': smtp_enabled,
             'smtp_host': smtp.get('host', ''),
-            'smtp_port': smtp.get('port', 587)
-        }, allow_unicode=True, sort_keys=False))
+            'smtp_port': smtp.get('port', 587),
+        }, lang)
 
         if not yesno(prompt(
             'Підтвердити налаштування? y/N: '
@@ -369,7 +371,7 @@ def _main() -> int:
         except BaseException:
             for p in written:p.unlink(missing_ok=True)
             raise
-        print(t['complete'])
+        ui.message('[OK] ' + t['complete'])
 
         return 0
     except (KeyboardInterrupt, EOFError):
