@@ -44,7 +44,7 @@ Substitute **your own Home Assistant server IP address** in this example (the ad
 
 ```bash
 curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
-  http://192.168.50.134:8123/api/
+  http://127.0.0.1:8123/api/
 ```
 
 An HTTP `401` response is expected for an unauthenticated API request and confirms the server is reachable; HTTP `000` or a connection error means networking should be checked. On a separate host, do not use `127.0.0.1` unless Home Assistant is actually hosted there.
