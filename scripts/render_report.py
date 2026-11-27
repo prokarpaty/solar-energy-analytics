@@ -1,6 +1,8 @@
 import json
 import argparse
 from localization import Localizer
+from installation_config import load_installation
+from report_sections import apply_sections
 
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -57,7 +59,9 @@ def measurement(data, entity, name, decimals=2, *, loc=None):
     }
 
 
-def build_context(data, language=None):
+def build_context(data, language=None, profile=None):
+    profile = load_installation() if profile is None else profile
+    voltage = profile["thresholds"]["grid_voltage"]
     loc = Localizer(language)
     fmt = loc.number
     start = datetime.fromisoformat(data["start"])
@@ -77,6 +81,7 @@ def build_context(data, language=None):
         item = data["energy"].get(key, {})
 
         energy.append({
+            "key": key,
             "label": label,
             "color": color,
             "value": fmt(item.get("total")),
@@ -146,14 +151,14 @@ def build_context(data, language=None):
         maximum = item.get("max")
         minimum = item.get("min")
 
-        if maximum is not None and maximum > 253:
+        if maximum is not None and maximum > voltage["maximum"]:
             warnings.append(
-                loc.text("presentation.voltage_high", phase=phase.upper(), value=fmt(maximum))
+                loc.text("presentation.voltage_high", phase=phase.upper(), value=fmt(maximum), limit=fmt(voltage["maximum"]))
             )
 
-        if minimum is not None and minimum < 207:
+        if minimum is not None and minimum < voltage["minimum"]:
             warnings.append(
-                loc.text("presentation.voltage_low", phase=phase.upper(), value=fmt(minimum))
+                loc.text("presentation.voltage_low", phase=phase.upper(), value=fmt(minimum), limit=fmt(voltage["minimum"]))
             )
 
     bank_labels = {
@@ -228,12 +233,25 @@ def build_context(data, language=None):
         "kpis": energy[:6],
         "energy": energy,
         "phases": phases,
+        "voltage_reference": loc.text("presentation.voltage_reference", **{k: fmt(v) for k, v in voltage.items()}),
         "battery_bank": battery_bank,
         "batteries": batteries,
         "temperatures": temperatures,
         "warnings": warnings,
         "conclusions": conclusions
     }
+
+
+def equipment_rows(profile, loc):
+    rows = []
+    for group, fields in profile["equipment"].items():
+        for key, value in fields.items():
+            if value is None:
+                continue
+            if isinstance(value, (int, float)):
+                value = loc.number(value, 0 if key == "panel_count" else 2)
+            rows.append((loc.text("equipment." + group), loc.text("equipment." + key), value))
+    return rows
 
 
 def render(source, language=None):
@@ -243,17 +261,22 @@ def render(source, language=None):
         source.read_text(encoding="utf-8")
     )
 
-    context = build_context(data, language)
+    profile = load_installation()
+    context = build_context(data, language, profile)
+    context["profile"] = profile
+    context["equipment_rows"] = equipment_rows(context["profile"], Localizer(language))
 
     print("Generating charts...")
-    context["charts"] = generate_charts(data, language=language)
+    context["charts"] = (generate_charts(data, language=language, profile=profile)
+                         if context["profile"]["report"]["sections"]["charts"] else [])
+    apply_sections(context)
 
     env = Environment(
-        loader=FileSystemLoader("/app/templates"),
+        loader=FileSystemLoader(str(Path(__file__).resolve().parents[1] / "templates")),
         autoescape=select_autoescape(["html", "xml"])
     )
 
-    template = env.get_template("report_ua.html")
+    template = env.get_template("report.html")
 
     html_path = source.with_suffix(".html")
     pdf_path = source.with_suffix(".pdf")
@@ -263,7 +286,7 @@ def render(source, language=None):
     html = template.render(
         **context,
         pdf=False,
-        plotly_js=get_plotlyjs()
+        plotly_js=get_plotlyjs() if "charts" in context["section_numbers"] else ""
     )
 
     html_path.write_text(html, encoding="utf-8")

@@ -23,3 +23,6 @@ __pycache__/
 # User-specific mappings and schedules
 config/sensors.yaml
 config/schedule.yaml
+
+# Local installation presentation settings
+config/installation.yaml

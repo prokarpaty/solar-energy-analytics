@@ -49,8 +49,8 @@
     "ratio": "Generation-to-consumption ratio: {value}%.",
     "net_export": "Net electricity export: {value} kWh.",
     "net_import": "Net electricity import: {value} kWh.",
-    "voltage_high": "{phase}: Maximum voltage {value} V exceeds the indicative limit of 253 V.",
-    "voltage_low": "{phase}: Minimum voltage {value} V is below 207 V. Telemetry requires verification.",
+    "voltage_high": "{phase}: Maximum voltage {value} V exceeds the indicative limit of {limit} V.",
+    "voltage_low": "{phase}: Minimum voltage {value} V is below {limit} V. Telemetry requires verification.",
     "metric_0": "State of charge, %",
     "metric_1": "State of health, %",
     "metric_2": "Voltage, V",
@@ -106,7 +106,8 @@
     "template_30": "Time zone:",
     "template_31": "Generated:",
     "template_32": "Power charts show averaged values. Missing telemetry does not confirm a power outage.",
-    "template_33": "Solar Reports — automated energy analytics system."
+    "template_33": "Solar Reports — automated energy analytics system.",
+    "voltage_reference": "Indicative voltage range: {minimum}–{maximum} V; nominal: {nominal} V. Hourly statistics do not establish anomaly duration or grid compliance."
   },
   "chart": {
     "no_data": "No historical data",
@@ -165,5 +166,17 @@
     "t18": "Time zone:",
     "t19": "This is an automated message from Solar Energy Analytics.",
     "t20": "Detailed PDF and HTML reports are attached."
+  },
+  "equipment": {
+    "heading": "Equipment information",
+    "inverter": "Inverter",
+    "solar": "Solar panels",
+    "battery": "Battery",
+    "manufacturer": "Manufacturer",
+    "model": "Model",
+    "rated_power_kw": "Rated power (kW)",
+    "installed_capacity_kwp": "Installed capacity (kWp)",
+    "panel_count": "Panel count",
+    "nominal_capacity_kwh": "Nominal capacity (kWh)"
   }
 }

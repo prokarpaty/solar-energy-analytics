@@ -14,3 +14,5 @@ __pycache__/
 
 config/sensors.yaml
 config/schedule.yaml
+
+config/installation.yaml

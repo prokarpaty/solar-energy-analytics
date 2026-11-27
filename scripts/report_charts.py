@@ -115,6 +115,7 @@ def create_chart(
     metric="mean",
     chart_type="line",
     limits=None,
+    nominal=None,
     language=None
 ):
     loc = Localizer(language)
@@ -182,6 +183,10 @@ def create_chart(
             color="#16A34A",
             alpha=0.08
         )
+
+    if nominal is not None:
+        fig.add_hline(y=nominal, line_dash="dot", line_color="#64748b")
+        ax.axhline(nominal, linestyle=":", color="#64748b")
 
     fig.update_layout(
         title=title,
@@ -285,7 +290,10 @@ def create_chart(
     }
 
 
-def generate_charts(data, language=None):
+def generate_charts(data, language=None, profile=None):
+    from installation_config import load_installation
+    profile = load_installation() if profile is None else profile
+    voltage = profile["thresholds"]["grid_voltage"]
     loc = Localizer(language)
     t = loc.text
     from ha_client import CONFIG
@@ -314,7 +322,7 @@ def generate_charts(data, language=None):
     pv = [(v, k.upper(), palette[i % len(palette)]) for i, (k,v) in enumerate((item for item in power.items() if item[0].startswith("pv") and item[0][2:].isdigit()))]
     add(t("chart.pv_power"), t("chart.power_unit"), pv + [(power.get("solar"), t("chart.total"), COLORS["export"])])
     add(t("chart.system_power"), t("chart.power_unit"), mapped(power, [("solar", t("chart.solar"), "solar"), ("house", t("chart.consumption"), "house"), ("grid", t("chart.grid"), "grid"), ("battery", t("chart.battery"), "battery")]))
-    add(t("chart.grid_voltage"), t("chart.voltage_unit"), [(v, k.upper(), palette[i % len(palette)]) for i,(k,v) in enumerate(grid.get("voltage", {}).items())], limits=(207,253))
+    add(t("chart.grid_voltage"), t("chart.voltage_unit"), [(v, k.upper(), palette[i % len(palette)]) for i,(k,v) in enumerate(grid.get("voltage", {}).items())], limits=(voltage["minimum"], voltage["maximum"]), nominal=voltage["nominal"])
     add(t("chart.phase_load"), t("chart.power_unit"), [(v.get("power"), v.get("name", k.upper()), palette[i % len(palette)]) for i,(k,v) in enumerate(house.items())])
     add(t("chart.charge_discharge"), t("chart.energy_unit"), mapped(energy, [("battery_charge", t("chart.charge"), "battery"), ("battery_discharge", t("chart.discharge"), "purple")]), source="energy", metric="change", chart_type="bar")
     add(t("chart.battery_soc"), "%", [(bank.get("soc"), t("chart.total_soc"), COLORS["battery"])] + battery_series("soc"))

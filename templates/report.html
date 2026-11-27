@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
 
-{% if not pdf %}
+{% if not pdf and "charts" in section_numbers %}
 <script>{{ plotly_js | safe }}</script>
 {% endif %}
 
@@ -39,7 +39,7 @@ body {
 }
 
 .hero {
-    background: #10233d;
+    background: {{ profile.branding.primary_color }};
     color: white;
     padding: 32px;
     border-radius: 12px;
@@ -59,7 +59,7 @@ body {
 .brand {
     font-size: 10px;
     letter-spacing: 2px;
-    color: #facc15;
+    color: {{ profile.branding.accent_color }};
     font-weight: bold;
 }
 
@@ -77,7 +77,7 @@ h2 {
 }
 
 .kpi {
-    width: calc(33.333% - 8px);
+    width: {{ 100 / kpi_columns - 2 }}%;
     padding: 18px;
     border: 1px solid #e2e8f0;
     border-top: 4px solid var(--accent);
@@ -122,7 +122,7 @@ table {
 }
 
 th {
-    background: #10233d;
+    background: {{ profile.branding.primary_color }};
     color: white;
     text-align: left;
 }
@@ -182,7 +182,7 @@ button {
     .container { margin: 0; padding: 0; }
     .hero { padding: 20px; }
     .hero h1 { font-size: 23pt; }
-    .kpi { width: 31%; padding: 10px; }
+    .kpi { width: {{ 100 / kpi_columns - 2 }}%; padding: 10px; }
     .kpi-value { font-size: 19pt; }
     .kpi-grid { gap: 8px; }
     .no-print { display: none; }
@@ -196,11 +196,22 @@ button {
 <main class="container">
 
 <header class="hero">
-    <div class="brand">DEYE / SOLAR ENERGY ANALYTICS</div>
+    <div class="brand">{{ profile.branding.name }}</div>
     <h1>{{ t('presentation.template_1') }}</h1>
     <p>{{ title }}</p>
     <p>{{ period }}</p>
+    {% if profile.installation.name %}<p>{{ profile.installation.name }}</p>{% endif %}
+    {% if profile.installation.location %}<p>{{ profile.installation.location }}</p>{% endif %}
+    {% if profile.installation.description %}<p>{{ profile.installation.description }}</p>{% endif %}
 </header>
+{% if equipment_rows %}
+<h2>{{ t('equipment.heading') }}</h2>
+<table><tbody>
+{% for group, label, value in equipment_rows %}
+<tr><td>{{ group }}</td><td>{{ label }}</td><td>{{ value }}</td></tr>
+{% endfor %}
+</tbody></table>
+{% endif %}
 
 {% if not pdf %}
 <div class="no-print">
@@ -208,7 +219,8 @@ button {
 </div>
 {% endif %}
 
-<h2>01. {{ t('presentation.template_3') }}</h2>
+{% if "kpi_summary" in section_numbers %}
+<h2>{{ section_numbers["kpi_summary"] }}. {{ t('presentation.template_3') }}</h2>
 
 <div class="kpi-grid">
 {% for item in kpis %}
@@ -221,7 +233,9 @@ button {
 {% endfor %}
 </div>
 
-<h2>02. {{ t('presentation.template_4') }}</h2>
+{% endif %}
+{% if "energy_summary" in section_numbers %}
+<h2>{{ section_numbers["energy_summary"] }}. {{ t('presentation.template_4') }}</h2>
 
 <table>
 <thead>
@@ -244,7 +258,9 @@ button {
 </tbody>
 </table>
 
-<h2>03. {{ t('presentation.template_9') }}</h2>
+{% endif %}
+{% if "charts" in section_numbers %}
+<h2>{{ section_numbers["charts"] }}. {{ t('presentation.template_9') }}</h2>
 
 {% for chart in charts %}
 <div class="chart">
@@ -256,8 +272,10 @@ button {
 </div>
 {% endfor %}
 
-{% if phases %}
-<h2>04. {{ t('presentation.template_10') }}</h2>
+{% endif %}
+{% if "grid_analysis" in section_numbers %}
+<h2>{{ section_numbers["grid_analysis"] }}. {{ t('presentation.template_10') }}</h2>
+<p>{{ voltage_reference }}</p>
 
 <table>
 <thead>
@@ -283,9 +301,10 @@ button {
 </table>
 
 {% endif %}
-{% if battery_bank or batteries %}
-<h2>05. {{ t('presentation.template_16') }}</h2>
+{% if "battery_analysis" in section_numbers %}
+<h2>{{ section_numbers["battery_analysis"] }}. {{ t('presentation.template_16') }}</h2>
 
+{% if battery_bank %}
 <table>
 <thead>
 <tr>
@@ -309,6 +328,7 @@ button {
 </tbody>
 </table>
 
+{% endif %}
 {% for battery in batteries %}
 <h3>{{ battery.name }}</h3>
 
@@ -337,8 +357,8 @@ button {
 {% endfor %}
 
 {% endif %}
-{% if temperatures %}
-<h2>06. {{ t('presentation.template_23') }}</h2>
+{% if "temperature_analysis" in section_numbers %}
+<h2>{{ section_numbers["temperature_analysis"] }}. {{ t('presentation.template_23') }}</h2>
 
 <table>
 <thead>
@@ -364,7 +384,8 @@ button {
 </table>
 
 {% endif %}
-<h2>07. {{ t('presentation.template_25') }}</h2>
+{% if "data_quality" in section_numbers %}
+<h2>{{ section_numbers["data_quality"] }}. {{ t('presentation.template_25') }}</h2>
 
 {% for warning in warnings %}
 <div class="notice">{{ warning }}</div>
@@ -372,7 +393,9 @@ button {
 <p>{{ t('presentation.template_26') }}</p>
 {% endfor %}
 
-<h2>08. {{ t('presentation.template_27') }}</h2>
+{% endif %}
+{% if "conclusions" in section_numbers %}
+<h2>{{ section_numbers["conclusions"] }}. {{ t('presentation.template_27') }}</h2>
 
 {% for conclusion in conclusions %}
 <div class="conclusion">{{ conclusion }}</div>
@@ -380,6 +403,7 @@ button {
 <p>{{ t('presentation.template_28') }}</p>
 {% endfor %}
 
+{% endif %}
 <footer class="footer">
     <p>{{ t('presentation.template_29') }}</p>
     <p>{{ t('presentation.template_30') }} {{ timezone }}</p>

@@ -1,0 +1,43 @@
+installation:
+  name: ""
+  location: ""
+  description: ""
+equipment:
+  inverter:
+    manufacturer: Deye
+    model: null
+    rated_power_kw: null
+  solar:
+    installed_capacity_kwp: null
+    panel_count: null
+  battery:
+    manufacturer: null
+    model: null
+    nominal_capacity_kwh: null
+branding:
+  name: "DEYE / SOLAR ENERGY ANALYTICS"
+  primary_color: "#0f172a"
+  accent_color: "#d97706"
+  logo: null
+report:
+  sections:
+    kpi_summary: true
+    energy_summary: true
+    charts: true
+    grid_analysis: true
+    battery_analysis: true
+    temperature_analysis: true
+    data_quality: true
+    conclusions: true
+  kpis:
+    - production
+    - consumption
+    - grid_import
+    - grid_export
+    - battery_charge
+    - battery_discharge
+thresholds:
+  grid_voltage:
+    nominal: 230
+    minimum: 207
+    maximum: 253
