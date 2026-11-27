@@ -107,5 +107,6 @@ def summary(details, language="en"):
         names = labels.get(period, (period, period))
         label = names[1] if language == "uk" else names[0]
         status = paint("● ON", "32") if enabled else paint("○ OFF", "2")
-        print(f"    {label:<18} {status}")
+        clock = details.get("report_times", {}).get(period, "00:00") if enabled else ""
+        print(f"    {label:<18} {status}  {clock}")
     print()
