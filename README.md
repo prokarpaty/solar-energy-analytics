@@ -17,13 +17,51 @@ Docker installation itself is not automated. Run as a normal local user with Doc
 
 ## Install / Встановлення
 
-While the repository is private, clone using an authorized SSH account. After publication, HTTPS cloning may also be used.
+### 1. Prepare Ubuntu / Підготовка Ubuntu
+
+On a clean Ubuntu 24.04 host, install the prerequisites for the installation wizard:
+
+```bash
+sudo apt update
+
+sudo apt install -y \
+  git \
+  curl \
+  ca-certificates \
+  python3 \
+  python3-yaml \
+  python3-websocket
+
+docker --version
+docker compose version
+```
+
+The final two commands verify Docker Engine and Docker Compose v2. If either command fails, [install Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/ubuntu/) before continuing. Run the installer as a normal user with Docker access through your user or `sudo`.
+
+### 2. Verify Home Assistant connectivity / Перевірка Home Assistant
+
+Substitute **your own Home Assistant server IP address** in this example (the address below is a private-LAN example, not an automatic discovery setting):
+
+```bash
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
+  http://192.168.50.134:8123/api/
+```
+
+An HTTP `401` response is expected for an unauthenticated API request and confirms the server is reachable; HTTP `000` or a connection error means networking should be checked. On a separate host, do not use `127.0.0.1` unless Home Assistant is actually hosted there.
+
+### 3. Clone and install / Клонування та встановлення
+
+While this repository remains private, the machine must have a GitHub SSH key authorized to access it.
 
 ```bash
 git clone git@github.com:prokarpaty/solar-energy-analytics.git
+
 cd solar-energy-analytics
+
 bash install.sh
 ```
+
+Follow the English/Ukrainian wizard. It confirms configuration, offers to build the Docker image, and asks separately before starting the scheduler.
 
 The bilingual wizard collects the Home Assistant URL and token; discovers sensor entities and helps map energy and optional measurements; configures installation/equipment/branding, timezone and report language; and offers daily, weekly, monthly, quarterly and yearly schedules plus optional SMTP delivery. SMTP authentication can be tested without sending a message. The installer validates configuration and **asks separately** before building the image and starting the scheduler. Do not enable automatic delivery if another installation is already sending the same reports.
 
