@@ -32,11 +32,31 @@ sudo apt install -y \
   python3-yaml \
   python3-websocket
 
-docker --version
-docker compose version
 ```
 
-The final two commands verify Docker Engine and Docker Compose v2. If either command fails, [install Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/ubuntu/) before continuing. Run the installer as a normal user with Docker access through your user or `sudo`.
+### Install Docker Engine and Compose / Встановлення Docker
+
+On Ubuntu 24.04, install Docker Engine and the Compose v2 plugin:
+
+```bash
+sudo apt update
+
+sudo apt install -y \
+  docker.io \
+  docker-compose-v2
+
+sudo systemctl enable --now docker
+```
+
+Verify the installation:
+
+```bash
+sudo docker --version
+sudo docker compose version
+sudo docker info --format 'Docker Engine: {{.ServerVersion}}'
+```
+
+If `docker-compose-v2` is unavailable from your Ubuntu repositories, follow the [official Docker Engine and Compose installation guide](https://docs.docker.com/engine/install/ubuntu/) instead. Run the wizard as a normal user, not root; it can use `sudo` for Docker access.
 
 ### 2. Verify Home Assistant connectivity / Перевірка Home Assistant
 
