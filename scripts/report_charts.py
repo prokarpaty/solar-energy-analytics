@@ -1,3 +1,4 @@
+from localization import Localizer
 import base64
 import io
 import math
@@ -113,8 +114,10 @@ def create_chart(
     source="measurements",
     metric="mean",
     chart_type="line",
-    limits=None
+    limits=None,
+    language=None
 ):
+    loc = Localizer(language)
     fig = go.Figure()
 
     mpl_fig, ax = plt.subplots(
@@ -182,6 +185,7 @@ def create_chart(
 
     fig.update_layout(
         title=title,
+        separators=", " if loc.language == "uk" else ".,",
         template="plotly_white",
         height=390,
         barmode="group",
@@ -207,6 +211,8 @@ def create_chart(
     )
 
     ax.set_ylabel(ylabel)
+    from matplotlib.ticker import FuncFormatter
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: loc.number(value, 6).rstrip("0").rstrip("," if loc.language == "uk" else ".")))
 
     tz = ZoneInfo(data["timezone"])
 
@@ -233,14 +239,14 @@ def create_chart(
     else:
         ax.text(
             0.5, 0.5,
-            "Немає історичних даних",
+            loc.text("chart.no_data"),
             transform=ax.transAxes,
             ha="center",
             va="center"
         )
 
         fig.add_annotation(
-            text="Немає історичних даних",
+            text=loc.text("chart.no_data"),
             xref="paper",
             yref="paper",
             x=0.5,
@@ -279,7 +285,9 @@ def create_chart(
     }
 
 
-def generate_charts(data):
+def generate_charts(data, language=None):
+    loc = Localizer(language)
+    t = loc.text
     from ha_client import CONFIG
     charts = []
     energy = CONFIG.get("energy", {})
@@ -293,24 +301,24 @@ def generate_charts(data):
     def add(title, unit, definitions, **kwargs):
         definitions = [d for d in definitions if isinstance(d[0], str) and d[0].startswith("sensor.")]
         if definitions:
-            charts.append(create_chart(data, title, unit, definitions, **kwargs))
+            charts.append(create_chart(data, title, unit, definitions, language=loc.language, **kwargs))
 
     def mapped(mapping, specs):
         return [(mapping.get(key), label, COLORS[color]) for key, label, color in specs]
 
     def battery_series(key):
-        return [(b.get(key), f"АКБ {i+1}", palette[i % len(palette)]) for i, b in enumerate(batteries.values())]
+        return [(b.get(key), t("chart.battery_number", number=i+1), palette[i % len(palette)]) for i, b in enumerate(batteries.values())]
 
-    add("Генерація та споживання електроенергії", "кВт·год", mapped(energy, [("production", "Генерація", "solar"), ("consumption", "Споживання", "house")]), source="energy", metric="change", chart_type="bar")
-    add("Імпорт та експорт електроенергії", "кВт·год", mapped(energy, [("grid_import", "Імпорт", "grid"), ("grid_export", "Експорт", "export")]), source="energy", metric="change", chart_type="bar")
+    add(t("chart.generation_consumption"), t("chart.energy_unit"), mapped(energy, [("production", t("chart.generation"), "solar"), ("consumption", t("chart.consumption"), "house")]), source="energy", metric="change", chart_type="bar")
+    add(t("chart.import_export"), t("chart.energy_unit"), mapped(energy, [("grid_import", t("chart.import"), "grid"), ("grid_export", t("chart.export"), "export")]), source="energy", metric="change", chart_type="bar")
     pv = [(v, k.upper(), palette[i % len(palette)]) for i, (k,v) in enumerate((item for item in power.items() if item[0].startswith("pv") and item[0][2:].isdigit()))]
-    add("Потужність сонячних панелей", "Вт", pv + [(power.get("solar"), "Загальна", COLORS["export"])])
-    add("Потужність енергетичної системи", "Вт", mapped(power, [("solar", "Сонце", "solar"), ("house", "Споживання", "house"), ("grid", "Мережа", "grid"), ("battery", "АКБ", "battery")]))
-    add("Напруга електромережі по фазах", "В", [(v, k.upper(), palette[i % len(palette)]) for i,(k,v) in enumerate(grid.get("voltage", {}).items())], limits=(207,253))
-    add("Навантаження по фазах", "Вт", [(v.get("power"), v.get("name", k.upper()), palette[i % len(palette)]) for i,(k,v) in enumerate(house.items())])
-    add("Заряд та розряд акумуляторів", "кВт·год", mapped(energy, [("battery_charge", "Заряд", "battery"), ("battery_discharge", "Розряд", "purple")]), source="energy", metric="change", chart_type="bar")
-    add("Рівень заряду акумуляторної системи", "%", [(bank.get("soc"), "Загальний SOC", COLORS["battery"])] + battery_series("soc"))
-    add("Температура акумуляторів", "°C", battery_series("temperature"))
-    add("Максимальний дисбаланс комірок АКБ", "В", battery_series("imbalance"), metric="max")
-    add("Температурний моніторинг", "°C", mapped(CONFIG.get("temperature", {}), [("inverter", "Інвертор", "grid"), ("inverter_dc", "Інвертор DC", "purple"), ("outside", "Вулиця", "house"), ("garage", "Гараж", "battery"), ("office", "Офіс", "export"), ("inverter_room", "Приміщення інвертора", "solar")]))
+    add(t("chart.pv_power"), t("chart.power_unit"), pv + [(power.get("solar"), t("chart.total"), COLORS["export"])])
+    add(t("chart.system_power"), t("chart.power_unit"), mapped(power, [("solar", t("chart.solar"), "solar"), ("house", t("chart.consumption"), "house"), ("grid", t("chart.grid"), "grid"), ("battery", t("chart.battery"), "battery")]))
+    add(t("chart.grid_voltage"), t("chart.voltage_unit"), [(v, k.upper(), palette[i % len(palette)]) for i,(k,v) in enumerate(grid.get("voltage", {}).items())], limits=(207,253))
+    add(t("chart.phase_load"), t("chart.power_unit"), [(v.get("power"), v.get("name", k.upper()), palette[i % len(palette)]) for i,(k,v) in enumerate(house.items())])
+    add(t("chart.charge_discharge"), t("chart.energy_unit"), mapped(energy, [("battery_charge", t("chart.charge"), "battery"), ("battery_discharge", t("chart.discharge"), "purple")]), source="energy", metric="change", chart_type="bar")
+    add(t("chart.battery_soc"), "%", [(bank.get("soc"), t("chart.total_soc"), COLORS["battery"])] + battery_series("soc"))
+    add(t("chart.battery_temperature"), "°C", battery_series("temperature"))
+    add(t("chart.cell_imbalance"), t("chart.voltage_unit"), battery_series("imbalance"), metric="max")
+    add(t("chart.temperature"), "°C", mapped(CONFIG.get("temperature", {}), [("inverter", t("chart.inverter"), "grid"), ("inverter_dc", t("chart.inverter_dc"), "purple"), ("outside", t("chart.outside"), "house"), ("garage", t("chart.garage"), "battery"), ("office", t("chart.office"), "export"), ("inverter_room", t("chart.inverter_room"), "solar")]))
     return charts

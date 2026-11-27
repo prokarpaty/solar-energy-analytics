@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="uk">
+<html lang="{{ language }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,7 +14,7 @@
     size: A4;
     margin: 15mm;
     @bottom-right {
-        content: "Сторінка " counter(page) " / " counter(pages);
+        content: "{{ t('presentation.template_0') }}" counter(page) " / " counter(pages);
         font-size: 9pt;
         color: #64748b;
     }
@@ -197,39 +197,39 @@ button {
 
 <header class="hero">
     <div class="brand">DEYE / SOLAR ENERGY ANALYTICS</div>
-    <h1>Сонячна електростанція</h1>
+    <h1>{{ t('presentation.template_1') }}</h1>
     <p>{{ title }}</p>
     <p>{{ period }}</p>
 </header>
 
 {% if not pdf %}
 <div class="no-print">
-    <button onclick="window.print()">Друк звіту</button>
+    <button onclick="window.print()">{{ t('presentation.template_2') }}</button>
 </div>
 {% endif %}
 
-<h2>01. Основні показники</h2>
+<h2>01. {{ t('presentation.template_3') }}</h2>
 
 <div class="kpi-grid">
 {% for item in kpis %}
 <div class="kpi" style="--accent:{{ item.color }}">
     <div class="kpi-label">{{ item.label }}</div>
     <div class="kpi-value">{{ item.value }}</div>
-    <div class="unit">кВт·год</div>
+    <div class="unit">{{ t('unit.energy') }}</div>
     <div class="unit">{{ item.status }}</div>
 </div>
 {% endfor %}
 </div>
 
-<h2>02. Енергетичний баланс</h2>
+<h2>02. {{ t('presentation.template_4') }}</h2>
 
 <table>
 <thead>
 <tr>
-    <th>Показник</th>
-    <th>Значення</th>
-    <th>Повнота даних</th>
-    <th>Статус</th>
+    <th>{{ t('presentation.template_5') }}</th>
+    <th>{{ t('presentation.template_6') }}</th>
+    <th>{{ t('presentation.template_7') }}</th>
+    <th>{{ t('presentation.template_8') }}</th>
 </tr>
 </thead>
 <tbody>
@@ -244,7 +244,7 @@ button {
 </tbody>
 </table>
 
-<h2>03. Аналітичні графіки</h2>
+<h2>03. {{ t('presentation.template_9') }}</h2>
 
 {% for chart in charts %}
 <div class="chart">
@@ -257,16 +257,16 @@ button {
 {% endfor %}
 
 {% if phases %}
-<h2>04. Якість електропостачання</h2>
+<h2>04. {{ t('presentation.template_10') }}</h2>
 
 <table>
 <thead>
 <tr>
-    <th>Фаза</th>
-    <th>Мін., В</th>
-    <th>Сер., В</th>
-    <th>Макс., В</th>
-    <th>Покриття</th>
+    <th>{{ t('presentation.template_11') }}</th>
+    <th>{{ t('presentation.template_12') }}</th>
+    <th>{{ t('presentation.template_13') }}</th>
+    <th>{{ t('presentation.template_14') }}</th>
+    <th>{{ t('presentation.template_15') }}</th>
 </tr>
 </thead>
 <tbody>
@@ -284,16 +284,16 @@ button {
 
 {% endif %}
 {% if battery_bank or batteries %}
-<h2>05. Акумуляторна система</h2>
+<h2>05. {{ t('presentation.template_16') }}</h2>
 
 <table>
 <thead>
 <tr>
-    <th>Показник</th>
-    <th>Мін.</th>
-    <th>Сер.</th>
-    <th>Макс.</th>
-    <th>Покриття</th>
+    <th>{{ t('presentation.template_5') }}</th>
+    <th>{{ t('presentation.template_20') }}</th>
+    <th>{{ t('presentation.template_21') }}</th>
+    <th>{{ t('presentation.template_22') }}</th>
+    <th>{{ t('presentation.template_15') }}</th>
 </tr>
 </thead>
 <tbody>
@@ -315,11 +315,11 @@ button {
 <table>
 <thead>
 <tr>
-    <th>Показник</th>
-    <th>Мін.</th>
-    <th>Сер.</th>
-    <th>Макс.</th>
-    <th>Покриття</th>
+    <th>{{ t('presentation.template_5') }}</th>
+    <th>{{ t('presentation.template_20') }}</th>
+    <th>{{ t('presentation.template_21') }}</th>
+    <th>{{ t('presentation.template_22') }}</th>
+    <th>{{ t('presentation.template_15') }}</th>
 </tr>
 </thead>
 <tbody>
@@ -338,16 +338,16 @@ button {
 
 {% endif %}
 {% if temperatures %}
-<h2>06. Температурний моніторинг</h2>
+<h2>06. {{ t('presentation.template_23') }}</h2>
 
 <table>
 <thead>
 <tr>
-    <th>Датчик</th>
-    <th>Мін., °C</th>
-    <th>Сер., °C</th>
-    <th>Макс., °C</th>
-    <th>Покриття</th>
+    <th>{{ t('presentation.template_24') }}</th>
+    <th>{{ t('presentation.template_17') }}</th>
+    <th>{{ t('presentation.template_18') }}</th>
+    <th>{{ t('presentation.template_19') }}</th>
+    <th>{{ t('presentation.template_15') }}</th>
 </tr>
 </thead>
 <tbody>
@@ -364,29 +364,28 @@ button {
 </table>
 
 {% endif %}
-<h2>07. Попередження та якість даних</h2>
+<h2>07. {{ t('presentation.template_25') }}</h2>
 
 {% for warning in warnings %}
 <div class="notice">{{ warning }}</div>
 {% else %}
-<p>За доступними даними налаштованих відхилень не виявлено.</p>
+<p>{{ t('presentation.template_26') }}</p>
 {% endfor %}
 
-<h2>08. Аналітичні висновки</h2>
+<h2>08. {{ t('presentation.template_27') }}</h2>
 
 {% for conclusion in conclusions %}
 <div class="conclusion">{{ conclusion }}</div>
 {% else %}
-<p>Недостатньо даних для формування висновків.</p>
+<p>{{ t('presentation.template_28') }}</p>
 {% endfor %}
 
 <footer class="footer">
-    <p>Джерело: Home Assistant Recorder / Deye.</p>
-    <p>Часовий пояс: {{ timezone }}</p>
-    <p>Сформовано: {{ generated_at }}</p>
-    <p>Графіки потужності відображають усереднені значення.
-       Пропуски телеметрії не є підтвердженням відключення електроенергії.</p>
-    <p>Solar Reports — автоматизована система енергетичної аналітики.</p>
+    <p>{{ t('presentation.template_29') }}</p>
+    <p>{{ t('presentation.template_30') }} {{ timezone }}</p>
+    <p>{{ t('presentation.template_31') }} {{ generated_at }}</p>
+    <p>{{ t('presentation.template_32') }}</p>
+    <p>{{ t('presentation.template_33') }}</p>
 </footer>
 
 </main>

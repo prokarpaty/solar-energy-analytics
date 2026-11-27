@@ -11,34 +11,24 @@ from zoneinfo import ZoneInfo
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from html import escape
+from localization import Localizer
 
 
 TZ = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Europe/Kyiv"))
 
-REPORT_NAMES = {
-    "daily": "Щоденний звіт",
-    "weekly": "Щотижневий звіт",
-    "monthly": "Щомісячний звіт",
-    "quarterly": "Щоквартальний звіт",
-    "yearly": "Річний звіт"
-}
 
-ENERGY_NAMES = {
-    "production": ("Генерація", "#d97706"),
-    "consumption": ("Споживання", "#2563eb"),
-    "grid_import": ("Імпорт з мережі", "#ea580c"),
-    "grid_export": ("Експорт в мережу", "#16a34a"),
-    "battery_charge": ("Заряд АКБ", "#0891b2"),
-    "battery_discharge": ("Розряд АКБ", "#9333ea"),
-    "inverter_losses": ("Втрати інвертора", "#64748b")
-}
+ENERGY_NAMES = {'production': ('production', '#d97706'),
+ 'consumption': ('consumption', '#2563eb'),
+ 'grid_import': ('grid_import', '#ea580c'),
+ 'grid_export': ('grid_export', '#16a34a'),
+ 'battery_charge': ('battery_charge', '#0891b2'),
+ 'battery_discharge': ('battery_discharge', '#9333ea'),
+ 'inverter_losses': ('inverter_losses', '#64748b')}
 
-STATUSES = {
-    "complete": "Повні дані",
-    "recovered": "За накопичувальним лічильником",
-    "partial": "Неповні дані",
-    "unavailable": "Немає даних"
-}
+STATUSES = {'complete': 'complete',
+ 'recovered': 'recovered',
+ 'partial': 'partial',
+ 'unavailable': 'unavailable'}
 
 logging.Formatter.converter = __import__("time").gmtime
 
@@ -46,11 +36,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s UTC | %(levelname)s | %(message)s",
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(
-            "/app/logs/email-delivery.log",
-            encoding="utf-8"
-        )
+        logging.StreamHandler()
     ]
 )
 
@@ -68,7 +54,12 @@ def fmt(value, decimals=1):
     )
 
 
-def build_email(data):
+def build_email(data, language=None):
+    loc = Localizer(language)
+    t = loc.text
+    fmt = loc.number
+    unit = t("unit.energy")
+    tz = ZoneInfo(data.get("timezone") or str(TZ))
 
     start = datetime.fromisoformat(data["start"])
     end = datetime.fromisoformat(data["end"])
@@ -76,28 +67,26 @@ def build_email(data):
 
     period = f"{start:%d.%m.%Y} — {last:%d.%m.%Y}"
 
-    title = REPORT_NAMES[data["report_type"]]
+    title = t("report." + data["report_type"])
 
-    subject = f"☀ СЕС | {title} | {period}"
+    subject = f"☀ {t('email.t0')} | {title} | {period}"
 
     rows = []
     plain_rows = []
     warnings = list(data.get("configuration_warnings", []))
 
-    for key, (label, color) in ENERGY_NAMES.items():
+    for key, (_, color) in ENERGY_NAMES.items():
+        label = t("energy." + key)
 
         if key not in data["energy"]:
             continue
         item = data["energy"].get(key, {})
 
-        value = fmt(item.get("total"))
+        value = fmt(item.get("total"), 1)
 
         coverage = fmt(item.get("coverage"), 2)
 
-        status = STATUSES.get(
-            item.get("status"),
-            "Невідомо"
-        )
+        status = t("status." + item["status"]) if item.get("status") in STATUSES else t("email.t1")
 
         rows.append(f"""
         <tr>
@@ -117,7 +106,7 @@ def build_email(data):
         """)
 
         plain_rows.append(
-            f"{label}: {value} кВт·год "
+            f"{label}: {value} {unit} "
             f"({coverage}%; {status})"
         )
 
@@ -137,21 +126,21 @@ def build_email(data):
 
         if net >= 0:
             net_text = (
-                f"Чистий експорт: {fmt(net)} кВт·год"
+                f"{t('email.t2')}: {fmt(net, 1)} {unit}"
             )
         else:
             net_text = (
-                f"Чистий імпорт: {fmt(abs(net))} кВт·год"
+                f"{t('email.t3')}: {fmt(abs(net), 1)} {unit}"
             )
 
     warning_html = ""
 
     if warnings:
-        warning_html = """
+        warning_html = f"""
         <div style="background:#fffbeb;
                     border-left:4px solid #d97706;
                     padding:16px;margin:20px 0">
-            <strong>Якість історичних даних</strong>
+            <strong>{t('email.t4')}</strong>
             <ul>
         """
 
@@ -161,11 +150,11 @@ def build_email(data):
 
         warning_html += "</ul></div>"
 
-    now = datetime.now(TZ)
+    now = datetime.now(tz)
 
     html = f"""
     <!DOCTYPE html>
-    <html lang="uk">
+    <html lang="{loc.language}">
     <head>
         <meta charset="UTF-8">
     </head>
@@ -184,7 +173,7 @@ def build_email(data):
             </div>
 
             <h1 style="font-size:26px;margin:12px 0">
-                ☀ Сонячна електростанція
+                ☀ {t('email.t5')}
             </h1>
 
             <p>{title}</p>
@@ -195,28 +184,26 @@ def build_email(data):
 
         <div style="padding:24px">
 
-            <p>Вітаємо!</p>
+            <p>{t('email.t6')}</p>
 
             <p>
-                Автоматично сформовано аналітичний звіт
-                щодо роботи сонячної електростанції
-                за зазначений період.
+                {t('email.t7')}
             </p>
 
-            <h2>Основні енергетичні показники</h2>
+            <h2>{t('email.t8')}</h2>
 
             <table style="width:100%;border-collapse:collapse;
                           font-size:14px">
 
                 <tr style="background:#10233d;color:white">
                     <th style="padding:12px;text-align:left">
-                        Показник
+                        {t('email.t9')}
                     </th>
                     <th style="padding:12px;text-align:right">
-                        кВт·год
+                        {unit}
                     </th>
                     <th style="padding:12px;text-align:right">
-                        Повнота
+                        {t('email.t10')}
                     </th>
                 </tr>
 
@@ -230,20 +217,17 @@ def build_email(data):
 
             {warning_html}
 
-            <h2>Детальний звіт</h2>
+            <h2>{t('email.t11')}</h2>
 
-            <p>До повідомлення додано:</p>
+            <p>{t('email.t12')}</p>
 
             <ul>
-                <li>PDF — повний аналітичний звіт.</li>
-                <li>HTML — інтерактивні графіки та статистика.</li>
+                <li>{t('email.t13')}</li>
+                <li>{t('email.t14')}</li>
             </ul>
 
             <p>
-                Детальний звіт містить інформацію про
-                генерацію, споживання, електромережу,
-                акумуляторну систему та температурний
-                моніторинг.
+                {t('email.t15')}
             </p>
 
         </div>
@@ -251,15 +235,14 @@ def build_email(data):
         <div style="background:#f8fafc;padding:20px;
                     color:#64748b;font-size:12px">
 
-            <p>Джерело даних: Home Assistant / Deye</p>
+            <p>{t('email.t16')}</p>
 
-            <p>Сформовано: {now:%d.%m.%Y %H:%M}</p>
+            <p>{t('email.t17')} {now:%d.%m.%Y %H:%M}</p>
 
-            <p>Часовий пояс: Europe/Kyiv</p>
+            <p>{t('email.t18')} {escape(str(tz))}</p>
 
             <p>
-                Це автоматичне повідомлення системи
-                Solar Energy Analytics.
+                {t('email.t19')}
             </p>
 
         </div>
@@ -280,18 +263,14 @@ def build_email(data):
         "",
         *warnings,
         "",
-        "Детальні звіти у форматах PDF та HTML додано.",
+        t("email.t20"),
         "Solar Energy Analytics"
     ])
 
     return subject, plain, html
 
 
-def send_report(source):
-
-    if os.environ.get("SMTP_ENABLED", "").lower() != "true":
-        raise RuntimeError("SMTP delivery is disabled")
-
+def build_message(source, language=None, preview=False):
     source = Path(source)
 
     if not source.is_file():
@@ -312,28 +291,16 @@ def send_report(source):
                 f"Report attachment missing: {path}"
             )
 
-    username = os.environ["SMTP_USERNAME"]
-
-    password = Path(
-        os.environ["SMTP_PASSWORD_FILE"]
-    ).read_text().strip()
-
-    recipients = [
-        address.strip()
-        for address in os.environ["SMTP_TO"].split(",")
-        if address.strip()
-    ]
-
-    if not recipients:
+    recipients = [address.strip() for address in os.getenv("SMTP_TO", "").split(",") if address.strip()]
+    if not preview and not recipients:
         raise RuntimeError("No SMTP recipients configured")
-
-    subject, plain, html = build_email(data)
+    subject, plain, html = build_email(data, language)
 
     message = EmailMessage()
 
     message["Subject"] = subject
-    message["From"] = os.environ["SMTP_FROM"]
-    message["To"] = ", ".join(recipients)
+    message["From"] = "preview@example.invalid" if preview else os.environ["SMTP_FROM"]
+    message["To"] = "preview@example.invalid" if preview else ", ".join(recipients)
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = make_msgid(
         domain="solar-reports.local"
@@ -368,6 +335,27 @@ def send_report(source):
         "Total encoded email size: %.2f MB",
         message_size / 1024**2
     )
+
+    return message
+
+
+def preview_report(source, language=None):
+    message = build_message(source, language, preview=True)
+    path = Path(source).with_suffix(".eml")
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+        handle.write(message.as_bytes())
+    path.chmod(0o600)
+    return path
+
+
+def send_report(source, language=None):
+    if os.environ.get("SMTP_ENABLED", "").lower() != "true":
+        raise RuntimeError("SMTP delivery is disabled")
+    logging.getLogger().addHandler(logging.FileHandler("/app/logs/email-delivery.log", encoding="utf-8"))
+    source = Path(source)
+    message = build_message(source, language)
+    username = os.environ["SMTP_USERNAME"]
+    password = Path(os.environ["SMTP_PASSWORD_FILE"]).read_text().strip()
 
     logger.info("Sending report: %s", source.name)
 
@@ -414,10 +402,15 @@ if __name__ == "__main__":
         help="Path to report JSON file"
     )
 
+    parser.add_argument("--language", choices=("en", "uk"))
+    parser.add_argument("--preview", action="store_true", help="Write local EML without SMTP")
     args = parser.parse_args()
 
     try:
-        send_report(args.source)
+        if args.preview:
+            print(preview_report(args.source, args.language))
+        else:
+            send_report(args.source, args.language)
     except Exception:
         logger.exception("Email delivery failed")
         raise SystemExit(1)

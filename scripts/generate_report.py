@@ -1,6 +1,7 @@
 import os
 import json
 import argparse
+from localization import Localizer
 
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -8,27 +9,17 @@ from datetime import datetime, timedelta
 from ha_client import collect_report, TZ
 
 
-REPORT_NAMES = {
-    "daily": "Щоденний",
-    "weekly": "Щотижневий",
-    "monthly": "Щомісячний",
-    "quarterly": "Щоквартальний",
-    "yearly": "Річний"
-}
+REPORT_NAMES = {'daily': 'daily',
+ 'weekly': 'weekly',
+ 'monthly': 'monthly',
+ 'quarterly': 'quarterly',
+ 'yearly': 'yearly'}
 
 
-ENERGY_NAMES = {
-    "production": "Генерація",
-    "consumption": "Споживання",
-    "grid_import": "Імпорт",
-    "grid_export": "Експорт",
-    "battery_charge": "Заряд АКБ",
-    "battery_discharge": "Розряд АКБ",
-    "inverter_losses": "Втрати інвертора"
-}
 
 
 def main():
+    loc = Localizer()
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -49,7 +40,7 @@ def main():
     if args.as_of and args.as_of.date() > datetime.now(TZ).date():
         parser.error("--as-of cannot be a future date")
 
-    print(f"Generating {args.type} report")
+    print(loc.text("cli.generating", period=loc.text("period." + args.type)))
 
     data = collect_report(args.type, now=args.as_of)
 
@@ -88,8 +79,8 @@ def main():
     temporary.replace(output)
 
     print("\n" + "=" * 65)
-    print(f"{REPORT_NAMES[args.type]} звіт")
-    print(f"Період: {start.date()} — {last_date}")
+    print(loc.text("report." + args.type))
+    print(loc.text("cli.period", start=start.date(), end=last_date))
     print("=" * 65)
 
     for key, item in data["energy"].items():
@@ -97,23 +88,23 @@ def main():
         value = item["total"]
 
         formatted = (
-            f"{value:.2f} кВт·год"
+            f"{loc.number(value)} {loc.text('unit.energy')}"
             if value is not None
-            else "Неповні дані"
+            else loc.text("status.partial")
         )
 
         print(
-            f"{ENERGY_NAMES[key]:22} "
+            f"{loc.text('energy.' + key):22} "
             f"{formatted:22} "
-            f"({item['coverage']:.1f}%) "
-            f"[{item.get('status', 'unknown')}]"
+            f"({loc.number(item['coverage'], 1)}%) "
+            f"[{loc.text('status.' + item['status']) if item.get('status') in ('complete','recovered','partial','unavailable') else loc.text('cli.unknown')}]"
         )
 
     print("=" * 65)
 
-    print(f"Measurement sensors: {len(data['measurements'])}")
-    print(f"Report saved: {output}")
-    print(f"File size: {output.stat().st_size:,} bytes")
+    print(loc.text("cli.sensors", count=len(data["measurements"])))
+    print(loc.text("cli.saved", path=output))
+    print(loc.text("cli.size", size=loc.number(output.stat().st_size, 0)))
 
 
 if __name__ == "__main__":
