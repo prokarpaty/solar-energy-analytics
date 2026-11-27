@@ -23,6 +23,8 @@ if ! docker info >/dev/null 2>&1; then
     sudo -v
 fi
 
+bash installer/bootstrap.sh
+
 python3 installer/preflight.py
 
 python3 installer/wizard.py
