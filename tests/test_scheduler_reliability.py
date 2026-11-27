@@ -179,4 +179,3 @@ class SchedulerReliability(unittest.TestCase):
             "Report subprocess failed"
         )
         self.assertNotIn(marker, "\n".join(captured.output))
-

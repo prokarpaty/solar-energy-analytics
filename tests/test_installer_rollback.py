@@ -13,6 +13,8 @@ sys.path.insert(
 
 import wizard
 import sensor_wizard
+import profile_wizard
+import yaml
 
 MARKER = "SYNTHETIC_ROLLBACK_SECRET"
 
@@ -25,6 +27,12 @@ class InstallerRollback(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "config").mkdir()
+
+            template = (
+                Path(__file__).resolve().parents[1]
+                / "config/installation.example.yaml"
+            )
+            profile = yaml.safe_load(template.read_text())
 
             original_create = wizard.create_exclusive
             calls = []
@@ -51,7 +59,9 @@ class InstallerRollback(unittest.TestCase):
                 "587",
                 "test@example.invalid",
                 "test@example.invalid",
-                "recipient@example.invalid"
+                "recipient@example.invalid",
+                "n",
+                "y"
             ]
 
             mapping = {
@@ -76,6 +86,8 @@ class InstallerRollback(unittest.TestCase):
                               return_value=([], [])), \
                  patch.object(sensor_wizard, "configure",
                               return_value=mapping), \
+                 patch.object(profile_wizard, "configure_profile",
+                              return_value=profile), \
                  patch.object(wizard, "create_exclusive",
                               side_effect=create), \
                  redirect_stdout(output), \
@@ -88,7 +100,8 @@ class InstallerRollback(unittest.TestCase):
                 root / "secrets/ha_token",
                 root / "secrets/smtp_password",
                 root / "config/sensors.yaml",
-                root / "config/schedule.yaml"
+                root / "config/schedule.yaml",
+                root / "config/installation.yaml"
             ]
 
             self.assertNotIn(
@@ -112,7 +125,7 @@ class InstallerRollback(unittest.TestCase):
 
             else:
                 self.assertEqual(result, 0)
-                self.assertEqual(len(calls), 5)
+                self.assertEqual(len(calls), 6)
 
                 for path in files:
                     self.assertTrue(path.is_file())
@@ -161,6 +174,9 @@ class InstallerRollback(unittest.TestCase):
 
     def test_failure_creating_schedule(self):
         self.simulate_installation(5)
+
+    def test_failure_creating_installation_profile(self):
+        self.simulate_installation(6)
 
     def test_interrupted_installation(self):
         self.simulate_installation(

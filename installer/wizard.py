@@ -20,11 +20,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 from ha_connection import validate_url, rest_open
+from email_security import validate_mailbox, validate_recipients
 I18N = {
     "en": {
         "title":"SOLAR ENERGY ANALYTICS — Setup Wizard",
         "language":"Choose language / Оберіть мову: 1) English  2) Українська [1]: ",
-        "welcome":"Configuration-only preview. No Docker deployment or email will occur.",
+        "welcome":"Configure your solar reporting installation. Docker deployment is a separate step.",
         "ha_url":"Home Assistant URL (e.g. http://192.168.1.100:8123): ",
         "ha_token":"Home Assistant long-lived access token (hidden): ",
         "timezone":"Timezone [Europe/Kyiv]: ",
@@ -52,7 +53,7 @@ I18N = {
     "uk": {
         "title":"SOLAR ENERGY ANALYTICS — Майстер налаштування",
         "language":"Choose language / Оберіть мову: 1) English  2) Українська [1]: ",
-        "welcome":"Попередній майстер налаштування. Docker не запускається, листи не надсилаються.",
+        "welcome":"Налаштування системи сонячної аналітики. Розгортання Docker виконується окремо.",
         "ha_url":"Адреса Home Assistant (наприклад http://192.168.1.100:8123): ",
         "ha_token":"Довготривалий токен Home Assistant (приховано): ",
         "timezone":"Часовий пояс [Europe/Kyiv]: ",
@@ -212,6 +213,7 @@ def _main() -> int:
         return 2
     try:
         from sensor_wizard import discover, configure
+        from profile_wizard import configure_profile
         import yaml
         default_url = 'http://127.0.0.1:8123'
         try:
@@ -243,6 +245,15 @@ def _main() -> int:
         tz=validate_tz(prompt(t['timezone'],'Europe/Kyiv'))
         report_lang=select_language(prompt(t['report_language'], '2' if lang=='uk' else '1'))
         inverter_profile='deye'
+        profile = configure_profile(
+            ROOT/'config/installation.example.yaml',
+            lang
+        )
+        profile_yaml = yaml.safe_dump(
+            profile,
+            allow_unicode=True,
+            sort_keys=False
+        )
         schedule_enabled={}
         names={'daily':('Daily','Щоденні'),'weekly':('Weekly','Щотижневі'),
                'monthly':('Monthly','Щомісячні'),'quarterly':('Quarterly','Щоквартальні'),
@@ -259,11 +270,62 @@ def _main() -> int:
             if not 1 <= smtp['port'] <= 65535: raise ValueError('SMTP port out of range')
             smtp['username']=prompt(t['username'])
             if not smtp['username']:raise ValueError('SMTP username required')
-            smtp['sender']=validate_email(prompt(t['sender'],smtp['username']))
-            smtp['recipient']=validate_email(prompt(t['recipient']))
+            smtp['sender']=validate_mailbox(
+                prompt(t['sender'],smtp['username'])
+            ).addr_spec
+            smtp['recipient']=",".join(
+                address.addr_spec for address in
+                validate_recipients(prompt(t['recipient']))
+            )
             smtp['password']=hidden_input(t['password'])
             if not smtp['password']:raise ValueError('SMTP password required')
+        if smtp_enabled:
+            from smtp_check import check_smtp
+
+            if yesno(prompt(
+                'Перевірити SMTP без надсилання листа? Y/n: '
+                if lang == 'uk' else
+                'Test SMTP without sending email? Y/n: '
+            ), True):
+                check_smtp(smtp)
+                print(
+                    '[OK] SMTP авторизація успішна'
+                    if lang == 'uk' else
+                    '[OK] SMTP authentication successful'
+                )
+
+        print(
+            '\\n=== Підсумок налаштування ==='
+            if lang == 'uk' else
+            '\\n=== Configuration summary ==='
+        )
+
+        print(yaml.safe_dump({
+            'installation': profile['installation']['name'],
+            'home_assistant': ha_url,
+            'timezone': tz,
+            'report_language': report_lang,
+            'reports': schedule_enabled,
+            'smtp_enabled': smtp_enabled,
+            'smtp_host': smtp.get('host', ''),
+            'smtp_port': smtp.get('port', 587)
+        }, allow_unicode=True, sort_keys=False))
+
+        if not yesno(prompt(
+            'Підтвердити налаштування? y/N: '
+            if lang == 'uk' else
+            'Confirm configuration? y/N: '
+        )):
+            return 2
+
         sensor_path=ROOT/'config/sensors.yaml'
+        profile_path=ROOT/'config/installation.yaml'
+
+        if not args.dry_run and (
+            profile_path.exists() or profile_path.is_symlink()
+        ):
+            print(t['exists'])
+            return 2
         if args.dry_run:
             print(t['dryrun'])
             return 0
@@ -283,12 +345,25 @@ def _main() -> int:
              f'SMTP_FROM={smtp.get("sender", "")}\nSMTP_TO={smtp.get("recipient", "")}\n'
              'SMTP_PASSWORD_FILE=/run/secrets/smtp_password\n'
              f'APP_UID={os.getuid()}\nAPP_GID={os.getgid()}\n')
+        for value in (
+            ha_url, tz, report_lang,
+            smtp.get('host', ''),
+            smtp.get('username', ''),
+            smtp.get('sender', ''),
+            smtp.get('recipient', '')
+        ):
+            if any(ord(c) < 32 or ord(c) == 127 for c in value):
+                raise ValueError('Invalid configuration value')
+            if any(c in value for c in ('$', '#', '"', "'", chr(92))):
+                raise ValueError('Unsupported environment value')
+
         written=[]
         try:
             for p, value, mode in ((ROOT/'.env',env,0o600),(secret_dir/'ha_token',token+'\n',0o600),
                                    (secret_dir/'smtp_password',(smtp.get('password') or '')+'\n',0o600),
                                    (sensor_path,mapping,0o600),
-                                   (ROOT/'config/schedule.yaml',schedule_yaml(tz,schedule_enabled),0o600)):
+                                   (ROOT/'config/schedule.yaml',schedule_yaml(tz,schedule_enabled),0o600),
+                                   (profile_path,profile_yaml,0o600)):
                 create_exclusive(p,value,mode)
                 written.append(p)
         except BaseException:
